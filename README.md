@@ -54,6 +54,10 @@ npm run cli -- read position --offer bid.json --account 0x...
 
 ## ABI lineages
 
-This build supports `core-v1` (6-field MarketParams / 15-field Offer — the Sepolia multi-loan
-candidate). The domain-bound lineage on bivium-core `dev` (8/17-field) is reserved as `core-v2`;
-profiles declaring it are rejected until implemented.
+Two lineages are supported behind one adapter boundary (`src/sdk/lineage.ts`):
+
+- `core-v1` — 6-field MarketParams / 15-field Offer (Sepolia multi-loan candidate core `0x344BA9…`,
+  profile `profiles/sepolia-multiloan-v1.json`)
+- `core-v2` — domain-bound 8/17-field (Sepolia Router V3 core `0x3d6083…`, profile
+  `profiles/sepolia-routerv3-v2.json`); market ids and offer commitments include `{chainId, core}`,
+  pinned by live-chain golden vectors in `test/lineage.test.ts`

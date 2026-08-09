@@ -6,9 +6,9 @@ import { parseArgs } from "node:util";
 import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  adapterFor,
   BiviumClient,
   buildSignedOfferFile,
-  computeMarketId,
   formatAmount,
   loadProfile,
   marketParamsFromOffer,
@@ -108,32 +108,36 @@ interface Ctx {
   values: Record<string, string | boolean | undefined>;
 }
 
-function tokenDecimalsOrFail(ctx: Ctx, address: Address, label: string): number {
+async function tokenDecimals(ctx: Ctx, address: Address): Promise<number> {
   const entry = Object.values(ctx.profile.tokens ?? {}).find((t) => t.address === address);
-  if (!entry) fail(`${label} ${address} is not in the profile token allowlist (needed for exact decimals)`);
-  return entry.decimals;
+  if (entry) return entry.decimals;
+  // Not allowlisted: read the exact decimals from the chain rather than guessing.
+  return await client(ctx, false).tokenDecimals(address);
 }
 
 /** Market params from --offer file or explicit flags. */
-function resolveMarket(ctx: Ctx): { params: MarketParams; loanDecimals: number; collateralDecimals: number } {
+async function resolveMarket(ctx: Ctx, needDecimals = true): Promise<{ params: MarketParams; loanDecimals: number; collateralDecimals: number }> {
   const v = ctx.values;
   if (typeof v.offer === "string") {
     const { offer } = parseSignedOfferFile(readFileSync(v.offer, "utf8"), ctx.profile);
     const params = marketParamsFromOffer(offer);
     return {
       params,
-      loanDecimals: tokenDecimalsOrFail(ctx, params.loanToken, "loan token"),
-      collateralDecimals: tokenDecimalsOrFail(ctx, params.collateralToken, "collateral token"),
+      loanDecimals: await tokenDecimals(ctx, params.loanToken),
+      collateralDecimals: await tokenDecimals(ctx, params.collateralToken),
     };
   }
   const loan = resolveToken(ctx.profile, need(v.loan as string | undefined, "loan"));
   const collateral = resolveToken(ctx.profile, need(v.collateral as string | undefined, "collateral"));
-  if (!loan.info) fail(`--loan ${v.loan} not in profile token allowlist`);
-  if (!collateral.info) fail(`--collateral ${v.collateral} not in profile token allowlist`);
+  // --strike (raw) never needs decimals; --floor and amount formatting do. Fetch only when needed
+  // so identity-only commands work against tokens that are not deployed/allowlisted yet.
+  const wantDecimals = needDecimals || typeof v.floor === "string";
+  const loanDecimals = loan.info?.decimals ?? (wantDecimals ? await tokenDecimals(ctx, loan.address) : 0);
+  const collateralDecimals = collateral.info?.decimals ?? (wantDecimals ? await tokenDecimals(ctx, collateral.address) : 0);
   const maturity = BigInt(need(v.maturity as string | undefined, "maturity"));
   let strike: bigint;
   if (typeof v.strike === "string") strike = BigInt(v.strike);
-  else if (typeof v.floor === "string") strike = strikeFromFloor(v.floor, loan.info.decimals, collateral.info.decimals);
+  else if (typeof v.floor === "string") strike = strikeFromFloor(v.floor, loanDecimals, collateralDecimals);
   else fail("provide --floor or --strike");
   return {
     params: {
@@ -144,8 +148,8 @@ function resolveMarket(ctx: Ctx): { params: MarketParams; loanDecimals: number; 
       allowPartialRepay: v["allow-partial"] === true,
       gate: typeof v.gate === "string" ? (getAddress(v.gate) as Address) : ZERO_ADDRESS,
     },
-    loanDecimals: loan.info.decimals,
-    collateralDecimals: collateral.info.decimals,
+    loanDecimals,
+    collateralDecimals,
   };
 }
 
@@ -155,24 +159,19 @@ function client(ctx: Ctx, signing: boolean): BiviumClient {
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   "market id": async (ctx) => {
-    const { params } = resolveMarket(ctx);
-    const id = computeMarketId(params);
+    const { params } = await resolveMarket(ctx, false);
     const c = client(ctx, false);
     await c.verifyProfile();
-    const onchain = await c.pub.readContract({
-      address: ctx.profile.core,
-      abi: (await import("../sdk/abi.ts")).coreV1Abi,
-      functionName: "computeId",
-      args: [params],
-    });
+    const id = c.marketId(params);
+    const onchain = await c.computeIdOnChain(params);
     if (onchain !== id) fail(`local id ${id} != on-chain ${onchain}`);
     output(ctx.json, { marketId: id, params, onchainVerified: true }, `market id: ${id} (on-chain verified)`);
   },
 
   "market state": async (ctx) => {
-    const { params, loanDecimals, collateralDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
     const c = client(ctx, false);
-    const id = computeMarketId(params);
+    const id = c.marketId(params);
     const s = await c.marketState(id);
     output(
       ctx.json,
@@ -189,9 +188,10 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "read position": async (ctx) => {
-    const { params, loanDecimals, collateralDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
     const account = getAddress(need(ctx.values.account as string | undefined, "account")) as Address;
-    const p = await client(ctx, false).position(computeMarketId(params), account);
+    const c = client(ctx, false);
+    const p = await c.position(c.marketId(params), account);
     output(
       ctx.json,
       { ...p },
@@ -200,16 +200,18 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "read credit": async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const account = getAddress(need(ctx.values.account as string | undefined, "account")) as Address;
-    const credit = await client(ctx, false).creditOf(computeMarketId(params), account);
+    const c = client(ctx, false);
+    const credit = await c.creditOf(c.marketId(params), account);
     output(ctx.json, { credit }, `credit: ${formatAmount(credit, loanDecimals)} DCN face`);
   },
 
   "read liquidity": async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const account = getAddress(need(ctx.values.account as string | undefined, "account")) as Address;
-    const liquidity = await client(ctx, false).liquidityOf(computeMarketId(params), account);
+    const c = client(ctx, false);
+    const liquidity = await c.liquidityOf(c.marketId(params), account);
     output(ctx.json, { liquidity }, `liquidity: ${formatAmount(liquidity, loanDecimals)}`);
   },
 
@@ -220,15 +222,15 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "maker fund": async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const assets = parseAmount(need(ctx.values.assets as string | undefined, "assets"), loanDecimals);
     const c = client(ctx, true);
     const tx = await c.fund(params, assets);
-    output(ctx.json, { ...tx, assets }, `funded ${formatAmount(assets, loanDecimals)} into ${computeMarketId(params)}: ${tx.hash}`);
+    output(ctx.json, { ...tx, assets }, `funded ${formatAmount(assets, loanDecimals)} into ${c.marketId(params)}: ${tx.hash}`);
   },
 
   "maker withdraw-liquidity": async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const assets = parseAmount(need(ctx.values.assets as string | undefined, "assets"), loanDecimals);
     const c = client(ctx, true);
     const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : c.account;
@@ -237,7 +239,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "maker make-offer": async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const side = need(ctx.values.side as string | undefined, "side");
     if (side !== "buy" && side !== "sell") fail("--side must be buy or sell");
     const maxUnits = parseAmount(need(ctx.values["max-units"] as string | undefined, "max-units"), loanDecimals);
@@ -268,7 +270,10 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       group: `0x${randomBytes(32).toString("hex")}` as Hex,
       ratifier: ctx.profile.signatureRatifier,
     };
-    const commitment = offerCommitment(offer);
+    const commitment = adapterFor(ctx.profile.abiProfile).offerCommitment(
+      { chainId: ctx.profile.chainId, core: ctx.profile.core },
+      offer,
+    );
     const digest = ratifyDigest(ctx.profile.chainId, ctx.profile.signatureRatifier, commitment);
     const signature = await account.sign({ hash: digest });
     // Precheck: refuse to emit a file the on-chain ratifier would not accept.
@@ -296,7 +301,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const c = client(ctx, false);
     await c.verifyProfile();
     const s = await c.offerStatus(file.offer, file.signature);
-    const loanDecimals = tokenDecimalsOrFail(ctx, file.offer.loanToken, "loan token");
+    const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     output(
       ctx.json,
       { ...s },
@@ -313,8 +318,8 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "borrow quote": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
-    const loanDecimals = tokenDecimalsOrFail(ctx, file.offer.loanToken, "loan token");
-    const collateralDecimals = tokenDecimalsOrFail(ctx, file.offer.collateralToken, "collateral token");
+    const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
+    const collateralDecimals = await tokenDecimals(ctx, file.offer.collateralToken);
     const units = typeof ctx.values.units === "string" ? parseAmount(ctx.values.units, loanDecimals) : file.offer.maxUnits;
     const q = await client(ctx, false).quoteFill(file.offer, units);
     output(
@@ -332,7 +337,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "borrow execute": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
-    const loanDecimals = tokenDecimalsOrFail(ctx, file.offer.loanToken, "loan token");
+    const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     const units = parseAmount(need(ctx.values.units as string | undefined, "units"), loanDecimals);
     const c = client(ctx, true);
     const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : undefined;
@@ -345,14 +350,14 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   repay: async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const assets = parseAmount(need(ctx.values.assets as string | undefined, "assets"), loanDecimals);
     const tx = await client(ctx, true).repay(params, assets);
     output(ctx.json, { ...tx }, `repaid ${formatAmount(assets, loanDecimals)}: ${tx.hash}`);
   },
 
   reclaim: async (ctx) => {
-    const { params } = resolveMarket(ctx);
+    const { params } = await resolveMarket(ctx);
     const c = client(ctx, true);
     const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : undefined;
     const tx = await c.withdrawCollateral(params, receiver);
@@ -360,7 +365,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   claim: async (ctx) => {
-    const { params, loanDecimals } = resolveMarket(ctx);
+    const { params, loanDecimals } = await resolveMarket(ctx);
     const units = parseAmount(need(ctx.values.units as string | undefined, "units"), loanDecimals);
     const c = client(ctx, true);
     const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : undefined;

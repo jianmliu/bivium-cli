@@ -45,9 +45,11 @@ The Bivium core has two live ABI lineages:
 | Profile | MarketParams | Offer | computeId input | Example deployment |
 |---|---|---|---|---|
 | `core-v1` | 6 fields | 15 fields | 6-field tuple | Sepolia multi-loan candidate `0x344BA9…` (vendored pin `a9372d4`) |
-| `core-v2` (reserved) | 8 fields (`chainId`, `bivium` prefixed) | 17 fields | 8-field tuple | bivium-core `origin/dev` lineage (`02a1730d`+) |
+| `core-v2` | 8 fields (`chainId`, `bivium` prefixed) | 17 fields | 8-field tuple | Sepolia Router V3 core `0x3d6083…` (bivium-core `origin/dev` lineage) |
 
-v0.1 implements `core-v1` only. The profile loader rejects unknown values, and `BiviumClient.verifyProfile()`
+Both lineages are implemented behind a single adapter boundary (`src/sdk/lineage.ts`); everything
+above it speaks the 6 economic market fields and the adapter injects the profile's `{chainId, core}`
+domain where the lineage requires it. The profile loader rejects unknown values, and `BiviumClient.verifyProfile()`
 calls the on-chain `computeId` with a canary tuple and requires it to equal the SDK's local hash —
 a wrong-lineage core reverts (missing selector) or mismatches, and every write path refuses to start.
 This check exists because the failure it guards against actually happened (see Origin).

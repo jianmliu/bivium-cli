@@ -10,8 +10,8 @@ function requireAddress(value: unknown, label: string): Address {
 /** Load + validate a deployment profile. Unknown abiProfile values are rejected (fail closed). */
 export function loadProfile(path: string): DeploymentProfile {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  if (raw.abiProfile !== "core-v1") {
-    throw new Error(`unsupported abiProfile ${JSON.stringify(raw.abiProfile)} — this build supports "core-v1" only`);
+  if (raw.abiProfile !== "core-v1" && raw.abiProfile !== "core-v2") {
+    throw new Error(`unsupported abiProfile ${JSON.stringify(raw.abiProfile)} — supported: "core-v1", "core-v2"`);
   }
   if (typeof raw.name !== "string" || !raw.name) throw new Error("profile name missing");
   if (typeof raw.chainId !== "number" || !Number.isInteger(raw.chainId) || raw.chainId <= 0) {
@@ -34,7 +34,7 @@ export function loadProfile(path: string): DeploymentProfile {
   }
   return {
     name: raw.name,
-    abiProfile: "core-v1",
+    abiProfile: raw.abiProfile,
     chainId: raw.chainId,
     core: requireAddress(raw.core, "core"),
     signatureRatifier: requireAddress(raw.signatureRatifier, "signatureRatifier"),

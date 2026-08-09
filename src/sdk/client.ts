@@ -8,10 +8,10 @@ import {
   type Transport,
   type Chain,
 } from "viem";
-import { coreV1Abi, erc20Abi, ratifierAbi } from "./abi.ts";
-import { computeMarketId } from "./market.ts";
+import { erc20Abi } from "./abi.ts";
+import { adapterFor, type ChainDomain, type LineageAdapter } from "./lineage.ts";
 import { collateralForDebt, principalForUnits } from "./math.ts";
-import { offerCommitment, marketParamsFromOffer } from "./offer.ts";
+import { marketParamsFromOffer } from "./offer.ts";
 import { RATIFIED } from "./ratify.ts";
 import { simpleAprBpsFromPrice, tickToPrice } from "./tick.ts";
 import {
@@ -53,7 +53,8 @@ export interface OfferStatus {
 }
 
 // Canary tuple for verifyProfile(): any fixed params work — the check is that the on-chain
-// computeId selector exists AND hashes identically to the SDK's local implementation.
+// computeId selector exists AND hashes identically to the SDK's local implementation for the
+// profile's declared lineage. A wrong-lineage core reverts or mismatches; both refuse to run.
 const CANARY: MarketParams = {
   loanToken: "0x0000000000000000000000000000000000000001",
   collateralToken: "0x0000000000000000000000000000000000000002",
@@ -65,12 +66,14 @@ const CANARY: MarketParams = {
 
 export class BiviumClient {
   readonly profile: DeploymentProfile;
+  readonly adapter: LineageAdapter;
   readonly pub: PublicClient<Transport>;
   private readonly wallet?: WalletClient<Transport, Chain | undefined, Account>;
   private profileVerified = false;
 
   constructor(profile: DeploymentProfile, account?: Account) {
     this.profile = profile;
+    this.adapter = adapterFor(profile.abiProfile);
     const chain = {
       id: profile.chainId,
       name: profile.name,
@@ -86,31 +89,23 @@ export class BiviumClient {
     return this.wallet.account.address;
   }
 
-  /**
-   * Fail-closed ABI-lineage check: the live core must expose the core-v1 computeId selector and
-   * agree byte-for-byte with the SDK's local market hash. A domain-bound (core-v2) core reverts
-   * here — refusing to run is the point (this exact mismatch happened in the wild).
-   */
+  private get domain(): ChainDomain {
+    return { chainId: this.profile.chainId, core: this.profile.core };
+  }
+
+  /** Fail-closed ABI-lineage check — see CANARY note above. */
   async verifyProfile(): Promise<void> {
     if (this.profileVerified) return;
     const chainId = await this.pub.getChainId();
     if (chainId !== this.profile.chainId) {
       throw new Error(`RPC chain ${chainId} != profile chain ${this.profile.chainId}`);
     }
-    let onchain: Hex;
-    try {
-      onchain = await this.pub.readContract({
-        address: this.profile.core,
-        abi: coreV1Abi,
-        functionName: "computeId",
-        args: [CANARY],
-      });
-    } catch {
+    const onchain = await this.computeIdOnChain(CANARY).catch(() => {
       throw new Error(
-        `core ${this.profile.core} does not answer core-v1 computeId — wrong ABI lineage for profile "${this.profile.name}"`,
+        `core ${this.profile.core} does not answer ${this.profile.abiProfile} computeId — wrong ABI lineage for profile "${this.profile.name}"`,
       );
-    }
-    if (onchain !== computeMarketId(CANARY)) {
+    });
+    if (onchain !== this.marketId(CANARY)) {
       throw new Error("on-chain computeId disagrees with SDK market hash — refusing to continue");
     }
     this.profileVerified = true;
@@ -119,27 +114,45 @@ export class BiviumClient {
   // ---- reads -------------------------------------------------------------
 
   marketId(params: MarketParams): Hex {
-    return computeMarketId(params);
+    return this.adapter.computeMarketId(this.domain, params);
+  }
+
+  async computeIdOnChain(params: MarketParams): Promise<Hex> {
+    return (await this.pub.readContract({
+      address: this.profile.core,
+      abi: this.adapter.coreAbi,
+      functionName: "computeId",
+      args: [this.adapter.chainParams(this.domain, params)],
+    } as never)) as Hex;
+  }
+
+  private async readCore<T>(functionName: string, args: readonly unknown[]): Promise<T> {
+    return (await this.pub.readContract({
+      address: this.profile.core,
+      abi: this.adapter.coreAbi,
+      functionName,
+      args,
+    } as never)) as T;
   }
 
   async marketState(id: Hex): Promise<MarketState> {
-    return await this.pub.readContract({ address: this.profile.core, abi: coreV1Abi, functionName: "marketState", args: [id] });
+    return await this.readCore("marketState", [id]);
   }
 
   async position(id: Hex, borrower: Address): Promise<Position> {
-    return await this.pub.readContract({ address: this.profile.core, abi: coreV1Abi, functionName: "position", args: [id, borrower] });
+    return await this.readCore("position", [id, borrower]);
   }
 
   async creditOf(id: Hex, holder: Address): Promise<bigint> {
-    return await this.pub.readContract({ address: this.profile.core, abi: coreV1Abi, functionName: "creditOf", args: [id, holder] });
+    return await this.readCore("creditOf", [id, holder]);
   }
 
   async liquidityOf(id: Hex, lender: Address): Promise<bigint> {
-    return await this.pub.readContract({ address: this.profile.core, abi: coreV1Abi, functionName: "liquidityOf", args: [id, lender] });
+    return await this.readCore("liquidityOf", [id, lender]);
   }
 
   async consumed(maker: Address, group: Hex): Promise<bigint> {
-    return await this.pub.readContract({ address: this.profile.core, abi: coreV1Abi, functionName: "consumed", args: [maker, group] });
+    return await this.readCore("consumed", [maker, group]);
   }
 
   async tokenDecimals(token: Address): Promise<number> {
@@ -166,28 +179,23 @@ export class BiviumClient {
 
   /** Every check `borrow execute` runs before spending gas. */
   async offerStatus(offer: Offer, signature: Hex): Promise<OfferStatus> {
-    const commitment = offerCommitment(offer);
-    const marketId = computeMarketId(marketParamsFromOffer(offer));
+    const commitment = this.adapter.offerCommitment(this.domain, offer);
+    const marketId = this.marketId(marketParamsFromOffer(offer));
     const block = await this.pub.getBlock();
     const now = block.timestamp;
     const [consumed, makerLiquidity, ratifierRegistered] = await Promise.all([
       this.consumed(offer.maker, offer.group),
       this.liquidityOf(marketId, offer.maker),
-      this.pub.readContract({
-        address: this.profile.core,
-        abi: coreV1Abi,
-        functionName: "isRatifier",
-        args: [offer.maker, offer.ratifier],
-      }),
+      this.readCore<boolean>("isRatifier", [offer.maker, offer.ratifier]),
     ]);
     let ratified = false;
     try {
       const result = await this.pub.readContract({
         address: offer.ratifier,
-        abi: ratifierAbi,
+        abi: this.adapter.ratifierAbi,
         functionName: "isRatified",
-        args: [offer.maker, offer.maxUnits, commitment, signature],
-      });
+        args: this.adapter.ratifierArgs(offer.maker, offer.maxUnits, commitment, signature),
+      } as never);
       ratified = result === RATIFIED;
     } catch {
       ratified = false;
@@ -229,6 +237,10 @@ export class BiviumClient {
     return { hash, gasUsed: receipt.gasUsed, blockNumber: receipt.blockNumber };
   }
 
+  private writeCore(functionName: string, args: readonly unknown[]): Promise<TxResult> {
+    return this.write({ address: this.profile.core, abi: this.adapter.coreAbi, functionName, args });
+  }
+
   /** Exact-amount approval — never unlimited. */
   async approveExact(token: Address, spender: Address, amount: bigint): Promise<TxResult> {
     return await this.write({ address: token, abi: erc20Abi, functionName: "approve", args: [spender, amount] });
@@ -239,25 +251,21 @@ export class BiviumClient {
   }
 
   async setRatifier(ratifier: Address, on: boolean): Promise<TxResult> {
-    return await this.write({ address: this.profile.core, abi: coreV1Abi, functionName: "setRatifier", args: [ratifier, on] });
+    return await this.writeCore("setRatifier", [ratifier, on]);
   }
 
   async fund(params: MarketParams, assets: bigint): Promise<TxResult> {
     await this.approveExact(params.loanToken, this.profile.core, assets);
-    const before = await this.liquidityOf(computeMarketId(params), this.account);
-    const tx = await this.write({ address: this.profile.core, abi: coreV1Abi, functionName: "fund", args: [params, assets] });
-    const after = await this.liquidityOf(computeMarketId(params), this.account);
+    const id = this.marketId(params);
+    const before = await this.liquidityOf(id, this.account);
+    const tx = await this.writeCore("fund", [this.adapter.chainParams(this.domain, params), assets]);
+    const after = await this.liquidityOf(id, this.account);
     if (after - before !== assets) throw new Error("fund postcondition failed: liquidity delta != assets");
     return tx;
   }
 
   async withdrawLiquidity(params: MarketParams, assets: bigint, receiver: Address): Promise<TxResult> {
-    return await this.write({
-      address: this.profile.core,
-      abi: coreV1Abi,
-      functionName: "withdrawLiquidity",
-      args: [params, this.account, assets, receiver],
-    });
+    return await this.writeCore("withdrawLiquidity", [this.adapter.chainParams(this.domain, params), this.account, assets, receiver]);
   }
 
   /**
@@ -277,12 +285,7 @@ export class BiviumClient {
 
     await this.approveExact(offer.collateralToken, this.profile.core, quote.collateral);
     const balanceBefore = await this.balanceOf(offer.loanToken, to);
-    const tx = await this.write({
-      address: this.profile.core,
-      abi: coreV1Abi,
-      functionName: "fill",
-      args: [offer, signature, units, this.account, to],
-    });
+    const tx = await this.writeCore("fill", [this.adapter.chainOffer(this.domain, offer), signature, units, this.account, to]);
     const balanceAfter = await this.balanceOf(offer.loanToken, to);
     if (balanceAfter - balanceBefore !== quote.principal) {
       throw new Error(`fill postcondition failed: received ${balanceAfter - balanceBefore}, quoted ${quote.principal}`);
@@ -292,24 +295,14 @@ export class BiviumClient {
 
   async repay(params: MarketParams, assets: bigint): Promise<TxResult> {
     await this.approveExact(params.loanToken, this.profile.core, assets);
-    return await this.write({ address: this.profile.core, abi: coreV1Abi, functionName: "repay", args: [params, assets, this.account] });
+    return await this.writeCore("repay", [this.adapter.chainParams(this.domain, params), assets, this.account]);
   }
 
   async withdrawCollateral(params: MarketParams, receiver?: Address): Promise<TxResult> {
-    return await this.write({
-      address: this.profile.core,
-      abi: coreV1Abi,
-      functionName: "withdrawCollateral",
-      args: [params, this.account, receiver ?? this.account],
-    });
+    return await this.writeCore("withdrawCollateral", [this.adapter.chainParams(this.domain, params), this.account, receiver ?? this.account]);
   }
 
   async claim(params: MarketParams, units: bigint, receiver?: Address): Promise<TxResult> {
-    return await this.write({
-      address: this.profile.core,
-      abi: coreV1Abi,
-      functionName: "claim",
-      args: [params, units, this.account, receiver ?? this.account],
-    });
+    return await this.writeCore("claim", [this.adapter.chainParams(this.domain, params), units, this.account, receiver ?? this.account]);
   }
 }

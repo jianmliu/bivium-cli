@@ -63,7 +63,7 @@ test("apr <-> price round-trip is consistent", () => {
 });
 
 test("signed offer file round-trips and rejects tampering", () => {
-  const profile = { chainId: 11155111, core: "0x344BA9909d952D0d404f37Cc9C93c40A35F35c07" as const };
+  const profile = { chainId: 11155111, core: "0x344BA9909d952D0d404f37Cc9C93c40A35F35c07" as const, abiProfile: "core-v1" as const };
   const commitment = offerCommitment(SESSION_OFFER);
   const signature = `0x${"11".repeat(65)}` as const;
   const file = buildSignedOfferFile(profile, SESSION_OFFER, commitment, signature);

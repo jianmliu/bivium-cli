@@ -2,6 +2,7 @@ export * from "./types.ts";
 export * from "./tick.ts";
 export * from "./math.ts";
 export * from "./market.ts";
+export * from "./lineage.ts";
 export * from "./offer.ts";
 export * from "./ratify.ts";
 export * from "./abi.ts";

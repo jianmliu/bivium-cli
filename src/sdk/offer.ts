@@ -1,4 +1,5 @@
 import { encodeAbiParameters, getAddress, keccak256 } from "viem";
+import { adapterFor } from "./lineage.ts";
 import type { Address, Hex, MarketParams, Offer, SignedOfferFile } from "./types.ts";
 
 // Field order MUST match the Solidity core-v1 `Offer` struct (15 fields, MarketParams prefix).
@@ -74,19 +75,26 @@ export function offerFromJson(raw: Record<string, unknown>): Offer {
 }
 
 /**
- * Parse + verify a signed-offer interchange file: schema, profile domain, and — critically —
- * recompute the commitment from the offer fields; the embedded value is untrusted.
+ * Parse + verify a signed-offer interchange file: schema, profile domain (chain, core, ABI
+ * lineage), and — critically — recompute the commitment from the offer fields with the profile's
+ * lineage adapter; the embedded value is untrusted.
  */
 export function parseSignedOfferFile(
   json: string,
-  expected: { chainId: number; core: Address },
+  expected: { chainId: number; core: Address; abiProfile: "core-v1" | "core-v2" },
 ): { offer: Offer; commitment: Hex; signature: Hex } {
   const raw = JSON.parse(json) as SignedOfferFile;
-  if (raw.schemaVersion !== 1 || raw.abiProfile !== "core-v1") throw new Error("unsupported offer file schema");
+  if (raw.schemaVersion !== 1 || (raw.abiProfile !== "core-v1" && raw.abiProfile !== "core-v2")) {
+    throw new Error("unsupported offer file schema");
+  }
+  if (raw.abiProfile !== expected.abiProfile) {
+    throw new Error(`offer file is ${raw.abiProfile}, profile is ${expected.abiProfile}`);
+  }
   if (raw.chainId !== expected.chainId) throw new Error(`offer file is for chain ${raw.chainId}, profile is ${expected.chainId}`);
   if (getAddress(raw.core) !== getAddress(expected.core)) throw new Error("offer file is for a different core");
   const offer = offerFromJson(raw.offer as Record<string, unknown>);
-  const commitment = offerCommitment(offer);
+  // Late import via live binding avoids a hard cycle with lineage.ts.
+  const commitment = adapterFor(raw.abiProfile).offerCommitment({ chainId: expected.chainId, core: getAddress(expected.core) as Address }, offer);
   if (typeof raw.commitment !== "string" || commitment !== raw.commitment.toLowerCase()) {
     throw new Error("offer commitment mismatch — file does not match its own offer fields");
   }
@@ -97,14 +105,14 @@ export function parseSignedOfferFile(
 }
 
 export function buildSignedOfferFile(
-  profile: { chainId: number; core: Address },
+  profile: { chainId: number; core: Address; abiProfile: "core-v1" | "core-v2" },
   offer: Offer,
   commitment: Hex,
   signature: Hex,
 ): SignedOfferFile {
   return {
     schemaVersion: 1,
-    abiProfile: "core-v1",
+    abiProfile: profile.abiProfile,
     chainId: profile.chainId,
     core: profile.core,
     offer: offerToJson(offer) as SignedOfferFile["offer"],

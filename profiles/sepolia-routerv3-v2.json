@@ -1,0 +1,9 @@
+{
+  "name": "sepolia-routerv3-v2",
+  "abiProfile": "core-v2",
+  "chainId": 11155111,
+  "core": "0x3d60833577De4C4D1c73F4E5bF87Dd4Ced7a0C99",
+  "signatureRatifier": "0x08C0aAd2F31F09377898Fdf3C5E5a21C3d6a87E8",
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "tokens": {}
+}

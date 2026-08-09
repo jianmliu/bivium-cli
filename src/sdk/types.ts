@@ -32,7 +32,7 @@ export interface TokenInfo {
 
 export interface DeploymentProfile {
   name: string;
-  abiProfile: "core-v1";
+  abiProfile: "core-v1" | "core-v2";
   chainId: number;
   core: Address;
   signatureRatifier: Address;
@@ -57,7 +57,7 @@ export interface Position {
 /** Signed-offer interchange file (all bigints as decimal strings). */
 export interface SignedOfferFile {
   schemaVersion: 1;
-  abiProfile: "core-v1";
+  abiProfile: "core-v1" | "core-v2";
   chainId: number;
   core: Address;
   offer: Record<keyof Offer, string | boolean>;
