@@ -1,0 +1,22 @@
+{
+  "name": "@bivium/cli",
+  "version": "0.1.0",
+  "description": "SDK + CLI for the Bivium fixed-rate credit primitive (core-v1 ABI lineage)",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "bivium": "./bin/bivium.mjs" },
+  "exports": { ".": "./src/sdk/index.ts" },
+  "scripts": {
+    "cli": "tsx src/cli/main.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.53.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0"
+  }
+}

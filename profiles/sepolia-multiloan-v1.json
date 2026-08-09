@@ -1,0 +1,14 @@
+{
+  "name": "sepolia-multiloan-v1",
+  "abiProfile": "core-v1",
+  "chainId": 11155111,
+  "core": "0x344BA9909d952D0d404f37Cc9C93c40A35F35c07",
+  "signatureRatifier": "0x0cE9bA63a31f3252aF9918E0Fe7DF0c4745f3323",
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "tokens": {
+    "USDC": { "address": "0x1DbF8Dee40739cd2b17C12EC63A67499F9796278", "decimals": 6, "mintable": true },
+    "GHO": { "address": "0x84b610ea0b055A6aD8475543C0A53fC9b66c0919", "decimals": 18, "mintable": true },
+    "WETH": { "address": "0x8E87161d2827613FE129daF8FA330460F95d629C", "decimals": 18, "mintable": true },
+    "WBTC": { "address": "0x822c57AEf2766ddd9aA570B53bF2917f0cF07761", "decimals": 8, "mintable": true }
+  }
+}
