@@ -30,6 +30,17 @@ export interface TokenInfo {
   mintable?: boolean;
 }
 
+/** Addresses of one deployed TBV (whole-vault ERC-1155) family. `keeper` is the maker-role EOA/contract. */
+export interface TbvSection {
+  factory: Address;
+  manager: Address;
+  receipt: Address;
+  vaultToken: Address;
+  keeper: Address;
+  redemption: Address;
+  redemptionAsset: Address;
+}
+
 export interface DeploymentProfile {
   name: string;
   abiProfile: "core-v1" | "core-v2";
@@ -38,6 +49,7 @@ export interface DeploymentProfile {
   signatureRatifier: Address;
   rpcUrl: string;
   tokens?: Record<string, TokenInfo>;
+  tbv?: TbvSection;
 }
 
 export interface MarketState {

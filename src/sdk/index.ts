@@ -8,3 +8,4 @@ export * from "./ratify.ts";
 export * from "./abi.ts";
 export * from "./client.ts";
 export * from "./profile.ts";
+export * from "./tbv.ts";

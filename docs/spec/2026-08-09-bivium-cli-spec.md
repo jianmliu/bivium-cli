@@ -166,3 +166,74 @@ authority is the chain).
   the WBTC market's post-repay state (`repaidCredit = 600000000`).
 - A full testnet lifecycle (fund → make-offer → borrow → repay → reclaim) reproduces the 2026-08-09
   session using only `bivium` commands.
+
+## TBV (whole vault) extension
+
+Drives one deployed TBV family — `TBVVaultFactory` / `TBVVault1155` / `TBVCollateralManager` /
+`TBVCollateralReceipt` + a redemption implementation — against the domain-bound core-v2 lineage.
+The profile grows an optional `tbv` section
+(`{factory, manager, receipt, vaultToken, keeper, redemption, redemptionAsset}`, all validated
+addresses); TBV commands fail cleanly when it is absent, and every TBV write first runs
+`verifyTbv()`: the section must equal the manager's own immutable bindings and the manager's frozen
+`BORROW_AUTHORIZATION_TYPEHASH` must equal the SDK's locally recomputed typed-data hash
+(`0x6f35331f5a3a01fe3ed68b1169936085c630eee7fb0e4d875643494c1ed74084`).
+
+### Command group
+
+```
+tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]
+tbv vault-status --token-id <n>
+tbv fund --token-id <n> --gate <addr> [--maturity <unix>] [--strike <raw>]
+tbv cancel-funding --token-id <n>
+tbv borrow --token-id <n> --offer <file> [--deadline <s>]
+tbv repay --token-id <n>
+tbv redeem-delivered --position-id <bytes32>
+```
+
+- `create-vault` runs the testnet redemption's issuer-only `approveCreation` then
+  `factory.createVault` with empty creationData; the signing key must be the redemption issuer
+  (the deployer on the local stack). Vault token ids and amounts are raw unitless integers.
+- `fund` reads the market entirely from the canonical gate (`CHAIN_ID/BIVIUM/LOAN_TOKEN/
+  COLLATERAL_TOKEN/MATURITY/STRIKE/MARKET_ID`), cross-checks the SDK's market hash against the
+  gate's `MARKET_ID` and the factory's `isCanonicalGate`, reads `expectedFundingNonce` from the
+  chain, and pre-validates the whole-lot quote (`tbvQuote` mirrors `TBVMath.quote`, including the
+  ceil-inverse round-trip check). Optional `--maturity/--strike` flags are cross-checks only.
+- `borrow` takes a standard signed-offer file. The manager constrains the offer: it must be a
+  resting BUY bid whose maker is the family's KEEPER role and whose market prefix equals the funded
+  market. The CLI rebuilds the `BorrowAuthorization` from the live on-chain `VaultPosition`
+  (amount/receiptAmount/positionAccount/marketId/fundingNonce, `face` = the exact maximum face),
+  signs it with the borrower key, and submits `manager.borrow(auth, sig, offer, ratifierData)`.
+  Postcondition: the borrower's loan-token delta equals the locally quoted principal exactly.
+- `repay` approves the exact face to the manager and calls `manager.repay`; postconditions require
+  the complete vault back in the owner's ERC-1155 balance and state `Repaid`.
+- `redeem-delivered` releases one defaulted vault to the keeper by its
+  `keccak256(abi.encode(token, tokenId, fundingNonce))` position id.
+
+### BorrowAuthorization signing model
+
+EIP-712 with the SignatureRatifier's minimal domain — `EIP712Domain(uint256 chainId,address
+verifyingContract)`, verifyingContract = the manager, no name/version — over the 15-field frozen
+struct `BorrowAuthorization(uint256 chainId,address manager,address bivium,address token,uint256
+tokenId,uint256 amount,uint256 receiptAmount,address positionAccount,bytes32 marketId,uint256
+fundingNonce,uint256 face,bytes32 offerCommitment,address borrower,uint256 deadline,uint256
+intentNonce)`. The manager only accepts a signature from the vault's original owner, the fields are
+all pinned to the live position (any cancel bumps `fundingNonce` and invalidates every outstanding
+authorization), `offerCommitment` binds the exact keeper bid (`hashOffer`), and `intentNonce` is
+single-use per borrower. Before signing, the SDK cross-checks its local digest against
+`manager.borrowAuthorizationDigest(auth)` and refuses on mismatch.
+
+### Local-anvil acceptance
+
+`script/DeployTBVLocal.s.sol` (bivium-core worktree) deploys core + SignatureRatifier + 6-decimal
+mock USDC, then redemption → exposure asset → receipt → factory (→ vault token) → manager in the
+canonical `vm.computeCreateAddress` order, then one `createMarketGate(31337, USDC, now+30d, 1e42)`
+— strike 1e42 = 1.000000 USDC face per whole vault unit, so whole-lot math is exact. Fresh anvil +
+account 0 as deployer gives the stable addresses pinned in `profiles/anvil-tbv-local.json`; the
+KEEPER role is account 0 itself (the maker EOA), the redemption issuer is the deployer. The
+recorded acceptance run uses only `bivium` commands: maker `mock mint` → `maker set-ratifier` →
+`maker fund` (gated market) → `maker make-offer --gate …` → `tbv create-vault` (receiver = account
+1) → borrower `tbv fund` → `tbv borrow` (received 99.182134 USDC for 100 face at tick 3872) →
+`tbv repay` (exact 100 face) → `tbv vault-status` shows `Repaid`, fundingNonce bumped to 1, and
+the complete vault back in the owner's balance. `test/tbv.test.ts` pins the typehash, a
+chain-verified BorrowAuthorization digest, positionId hashes, and the whole-lot quote math as
+offline golden vectors.

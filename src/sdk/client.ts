@@ -217,7 +217,7 @@ export class BiviumClient {
 
   // ---- writes (simulate-first, exact allowances, balance-delta postconditions) ----
 
-  private async write(request: {
+  protected async write(request: {
     address: Address;
     abi: readonly unknown[];
     functionName: string;

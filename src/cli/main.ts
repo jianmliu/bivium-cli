@@ -21,6 +21,7 @@ import {
   resolveToken,
   strikeFromFloor,
   tickToPrice,
+  TbvClient,
   RATIFIED,
   ZERO_ADDRESS,
   type Address,
@@ -47,6 +48,14 @@ usage: bivium <command> [options]
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
   mock mint --token <symbol|addr> --to <addr> --amount <human>
+
+  tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]   (key must be redemption issuer)
+  tbv vault-status --token-id <n>
+  tbv fund --token-id <n> --gate <addr> [--maturity <unix>] [--strike <raw>]   (market read from the gate)
+  tbv cancel-funding --token-id <n>
+  tbv borrow --token-id <n> --offer <file> [--deadline <s>]   (signs BorrowAuthorization with the key)
+  tbv repay --token-id <n>
+  tbv redeem-delivered --position-id <bytes32>
 
 market flags: --loan <symbol|addr> --collateral <symbol|addr> --maturity <unix>
               (--floor <human> | --strike <raw>) [--allow-partial] [--gate <addr>]
@@ -78,6 +87,9 @@ const OPTIONS = {
   to: { type: "string" },
   amount: { type: "string" },
   off: { type: "boolean", default: false },
+  "token-id": { type: "string" },
+  "position-id": { type: "string" },
+  deadline: { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -155,6 +167,17 @@ async function resolveMarket(ctx: Ctx, needDecimals = true): Promise<{ params: M
 
 function client(ctx: Ctx, signing: boolean): BiviumClient {
   return new BiviumClient(ctx.profile, signing ? loadKeyAccount(ctx.keyEnv) : undefined);
+}
+
+function tbvClient(ctx: Ctx, signing: boolean): TbvClient {
+  return new TbvClient(ctx.profile, signing ? loadKeyAccount(ctx.keyEnv) : undefined);
+}
+
+/** Vault token ids and amounts are raw unitless integers, never token-decimal scaled. */
+function rawBigInt(value: string | undefined, flag: string): bigint {
+  const v = need(value, flag);
+  if (!/^\d+$/.test(v)) fail(`--${flag} must be a non-negative integer`);
+  return BigInt(v);
 }
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -371,6 +394,98 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : undefined;
     const tx = await c.claim(params, units, receiver);
     output(ctx.json, { ...tx }, `claimed ${formatAmount(units, loanDecimals)} DCN face: ${tx.hash}`);
+  },
+
+  "tbv create-vault": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const amount = rawBigInt(ctx.values.amount as string | undefined, "amount");
+    const c = tbvClient(ctx, true);
+    const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : c.account;
+    const tx = await c.tbvCreateVault(receiver, tokenId, amount);
+    output(ctx.json, { ...tx, tokenId, amount, receiver }, `vault ${tokenId} created: ${amount} units to ${receiver} — tx ${tx.hash}`);
+  },
+
+  "tbv vault-status": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const c = tbvClient(ctx, false);
+    const s = await c.vaultStatus(tokenId);
+    if (!s.created) {
+      output(ctx.json, { created: false }, `vault ${tokenId}: not created`);
+      return;
+    }
+    const p = s.position;
+    output(
+      ctx.json,
+      { ...s },
+      [
+        `vault ${tokenId} (${s.completeSupply} units complete)`,
+        `  state:           ${s.stateName}${s.isDelivered ? " (DELIVERED)" : ""}`,
+        `  originalOwner:   ${p?.originalOwner}`,
+        `  positionAccount: ${p?.positionAccount}`,
+        `  marketId:        ${p?.marketId}`,
+        `  fundingNonce:    ${p?.fundingNonce}`,
+        `  borrowedFace:    ${p?.borrowedFace} (raw loan units)`,
+        `  receiptAmount:   ${p?.receiptAmount}`,
+        `  positionId:      ${s.positionId}`,
+        `  balances:        manager ${s.managerBalance} / owner ${s.ownerBalance}`,
+      ].join("\n"),
+    );
+  },
+
+  "tbv fund": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const gate = getAddress(need(ctx.values.gate as string | undefined, "gate")) as Address;
+    const c = tbvClient(ctx, true);
+    const { params } = await c.gateMarket(gate);
+    // Optional cross-checks: flags must agree with what the gate is immutably bound to.
+    if (typeof ctx.values.maturity === "string" && BigInt(ctx.values.maturity) !== params.maturity) {
+      fail(`--maturity ${ctx.values.maturity} != gate maturity ${params.maturity}`);
+    }
+    if (typeof ctx.values.strike === "string" && BigInt(ctx.values.strike) !== params.strike) {
+      fail(`--strike does not match gate strike ${params.strike}`);
+    }
+    const tx = await c.tbvFund(tokenId, gate);
+    output(
+      ctx.json,
+      { ...tx },
+      `vault ${tokenId} funded into market ${tx.marketId} (nonce ${tx.expectedFundingNonce}, max face ${tx.maximumFace}): ${tx.hash}`,
+    );
+  },
+
+  "tbv cancel-funding": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const tx = await tbvClient(ctx, true).tbvCancelFunding(tokenId);
+    output(ctx.json, { ...tx }, `funding cancelled, vault ${tokenId} returned: ${tx.hash}`);
+  },
+
+  "tbv borrow": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+    const deadlineSeconds = typeof ctx.values.deadline === "string" ? BigInt(ctx.values.deadline) : undefined;
+    const c = tbvClient(ctx, true);
+    const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
+    const result = await c.tbvBorrow(tokenId, file.offer, file.signature, { deadlineSeconds });
+    output(
+      ctx.json,
+      { ...result },
+      `borrowed against vault ${tokenId}: received ${formatAmount(result.principal, loanDecimals)} for ${formatAmount(result.face, loanDecimals)} face — tx ${result.hash}`,
+    );
+  },
+
+  "tbv repay": async (ctx) => {
+    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+    const c = tbvClient(ctx, true);
+    const loanToken = (await c.vaultStatus(tokenId)).marketParams?.loanToken;
+    const loanDecimals = loanToken && loanToken !== ZERO_ADDRESS ? await tokenDecimals(ctx, loanToken) : 0;
+    const tx = await c.tbvRepay(tokenId);
+    output(ctx.json, { ...tx }, `repaid ${formatAmount(tx.repaid, loanDecimals)}, vault ${tokenId} returned to owner: ${tx.hash}`);
+  },
+
+  "tbv redeem-delivered": async (ctx) => {
+    const positionId = need(ctx.values["position-id"] as string | undefined, "position-id");
+    if (!/^0x[0-9a-fA-F]{64}$/.test(positionId)) fail("--position-id must be a bytes32 hex value");
+    const tx = await tbvClient(ctx, true).tbvRedeemDelivered(positionId as Hex);
+    output(ctx.json, { ...tx }, `delivered vault released to keeper: ${tx.hash}`);
   },
 
   "mock mint": async (ctx) => {

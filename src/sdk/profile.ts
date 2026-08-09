@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { getAddress } from "viem";
-import type { Address, DeploymentProfile, TokenInfo } from "./types.ts";
+import type { Address, DeploymentProfile, TbvSection, TokenInfo } from "./types.ts";
 
 function requireAddress(value: unknown, label: string): Address {
   if (typeof value !== "string") throw new Error(`profile ${label} missing`);
@@ -32,6 +32,20 @@ export function loadProfile(path: string): DeploymentProfile {
       };
     }
   }
+  let tbv: TbvSection | undefined;
+  if (raw.tbv !== undefined) {
+    if (typeof raw.tbv !== "object" || raw.tbv === null) throw new Error("profile tbv must be an object");
+    const t = raw.tbv as Record<string, unknown>;
+    tbv = {
+      factory: requireAddress(t.factory, "tbv.factory"),
+      manager: requireAddress(t.manager, "tbv.manager"),
+      receipt: requireAddress(t.receipt, "tbv.receipt"),
+      vaultToken: requireAddress(t.vaultToken, "tbv.vaultToken"),
+      keeper: requireAddress(t.keeper, "tbv.keeper"),
+      redemption: requireAddress(t.redemption, "tbv.redemption"),
+      redemptionAsset: requireAddress(t.redemptionAsset, "tbv.redemptionAsset"),
+    };
+  }
   return {
     name: raw.name,
     abiProfile: raw.abiProfile,
@@ -40,6 +54,7 @@ export function loadProfile(path: string): DeploymentProfile {
     signatureRatifier: requireAddress(raw.signatureRatifier, "signatureRatifier"),
     rpcUrl: raw.rpcUrl,
     tokens,
+    tbv,
   };
 }
 
