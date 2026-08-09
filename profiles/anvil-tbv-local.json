@@ -7,6 +7,7 @@
   "rpcUrl": "http://127.0.0.1:8545",
   "tokens": {
     "USDC": { "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0", "decimals": 6, "mintable": true },
+    "WETH": { "address": "0x959922bE3CAee4b8Cd9a407cc3ac1C251C2007B1", "decimals": 18, "mintable": true },
     "TBVR": { "address": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707", "decimals": 18 }
   },
   "tbv": {

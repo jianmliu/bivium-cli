@@ -18,6 +18,9 @@ export function loadProfile(path: string): DeploymentProfile {
     throw new Error("profile chainId must be a positive integer");
   }
   if (typeof raw.rpcUrl !== "string" || !/^https?:\/\//.test(raw.rpcUrl)) throw new Error("profile rpcUrl must be http(s)");
+  if (raw.relayerUrl !== undefined && (typeof raw.relayerUrl !== "string" || !/^https?:\/\//.test(raw.relayerUrl))) {
+    throw new Error("profile relayerUrl must be an http(s) URL");
+  }
   const tokens: Record<string, TokenInfo> = {};
   if (raw.tokens !== undefined) {
     if (typeof raw.tokens !== "object" || raw.tokens === null) throw new Error("profile tokens must be an object");
@@ -53,6 +56,7 @@ export function loadProfile(path: string): DeploymentProfile {
     core: requireAddress(raw.core, "core"),
     signatureRatifier: requireAddress(raw.signatureRatifier, "signatureRatifier"),
     rpcUrl: raw.rpcUrl,
+    relayerUrl: raw.relayerUrl as string | undefined,
     tokens,
     tbv,
   };

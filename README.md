@@ -107,6 +107,55 @@ npm run cli -- tbv repay  --token-id 1
 npm run cli -- tbv vault-status --token-id 1     # → Repaid, complete vault back with the owner
 ```
 
+## DCN secondary trading (order book, sweeps, relayer)
+
+The `book`/`trade`/`order` command groups trade EXISTING credit (DCN) against resting signed
+offers — a maker's `Offer{buy:false}` ASK sells credit it holds, an `Offer{buy:true}` BID buys it.
+The book is assembled from one of two sources: `--source files --dir <path>` (every `*.json`
+SignedOfferFile in a directory, strictly validated against the profile) or `--source relayer`
+(the profile's optional `relayerUrl`, core-v2 only). A relayer failure is loud: `{ok:false}` is
+"relayer unavailable — not an empty book", exit 1 — never silently an empty book, and one
+malformed row poisons the whole batch.
+
+```bash
+# resting limit orders: sign asks/bids to a directory, optionally publish to the relayer
+npm run cli -- maker make-offer <market flags> --side sell --tick 3880 --max-units 60 --out orders/ask1.json
+npm run cli -- maker make-offer <market flags> --side sell --tick 3896 --max-units 60 --out orders/ask2.json --publish
+
+# depth view (reconciled against on-chain consumed; --depth N levels per side)
+npm run cli -- book list <market flags> --source files --dir orders
+
+# market orders: plan → show → execute every fill in ONE core multicall
+npm run cli -- trade buy  <market flags> --spend 100 --source files --dir orders   # or --units X [--exact-spend]
+npm run cli -- trade sell <market flags> --units 30 --limit-tick 3876 --source files --dir orders
+# --dry-run prints the plan (per-offer fills, total cost/proceeds, worst tick) without executing
+
+# maker order management
+npm run cli -- order list --maker 0x… <market flags> --source files --dir orders
+npm run cli -- order cancel --offer orders/ask2.json   # setConsumed(group, cap) + relayer DELETE
+```
+
+Sweep semantics mirror the core exactly (`_fill`/`_moveClaim`):
+
+- **Buy (take asks)** — the taker pays `ceil(units·price/WAD)` per fill (rounding is always
+  toward the resting maker); the CLI approves the exact total, prechecks the window, ratifier,
+  and that each maker's `creditOf` covers its planned units (a resting ask can only TRANSFER
+  existing credit — a shortfall reverts `OnlyTakerMayBorrow`), then submits all fills in one
+  `multicall`. Postconditions: taker credit delta == total units, loan-token delta == −total cost.
+- **Sell (take bids)** — the taker receives `floor(units·price/WAD)` per fill from the maker's
+  pre-funded liquidity. Selling existing credit is a pure secondary transfer and stays legal
+  at/after maturity (the matured guard only applies to new debt); the CLI instead requires the
+  taker's `creditOf ≥ units` so a fill can never slip into origination, and no collateral is
+  approved. Postconditions: credit delta == −units, loan delta == +total proceeds.
+- **Cancel** — on-chain `setConsumed(group, cap)` is the authority (kills the signature forever);
+  the relayer DELETE (EIP-191 `bivium-cancel:<commitment>` signed by the maker) only delists the
+  served copy and a failure there is a warning, not an error.
+
+Planning is pure BigInt (`src/sdk/orderbook.ts`, vectors pinned from the frontend's book tests):
+spend-sized buys floor-convert budget to face and never overspend; `--exact-spend` refuses any
+plan that cannot absorb the budget to the atomic unit; `--limit-tick` bounds the worst executed
+tick (buy: tick ≤ limit, sell: tick ≥ limit — higher tick = higher price).
+
 ## ABI lineages
 
 Two lineages are supported behind one adapter boundary (`src/sdk/lineage.ts`):

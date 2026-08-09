@@ -237,3 +237,73 @@ recorded acceptance run uses only `bivium` commands: maker `mock mint` → `make
 the complete vault back in the owner's balance. `test/tbv.test.ts` pins the typehash, a
 chain-verified BorrowAuthorization digest, positionId hashes, and the whole-lot quote math as
 offline golden vectors.
+
+## DCN trading extension (2026-08-10)
+
+Secondary trading of existing credit (DCN) against resting signed offers, layered on the same
+lineage-adapter/profile discipline. New SDK modules: `orderbook.ts` (pure BigInt book math),
+`relayer.ts` (wire client), `trade.ts` (`TradeClient extends BiviumClient`).
+
+### Command group
+
+```
+book list   [market flags] [--depth N] (--source files --dir <path> | --source relayer)
+trade buy   [market flags] (--units X | --spend Y [--exact-spend]) [--limit-tick N] [--dry-run] (--source …)
+trade sell  [market flags] --units X [--limit-tick N] [--dry-run] (--source …)
+order list  --maker <addr> [market flags] (--source …)
+order cancel --offer <file>
+maker make-offer … [--publish]
+```
+
+Book sources: `files` loads every `*.json` SignedOfferFile in `--dir` (each strictly validated by
+`parseSignedOfferFile` against the profile; other-market files skipped); `relayer` GETs
+`profile.relayerUrl` (new OPTIONAL profile field, http(s)-validated). Both are then reconciled
+against the core's `consumed` counters before display/planning — an unreadable counter fails the
+whole batch closed (`reconcileConsumedEntries`).
+
+### Sweep semantics
+
+A market order is planned off-chain (`planSweepByFace` / `planSweepBySpend` / `planExactSpend`,
+frontend-pinned vectors) and executed as ONE core `multicall` of encoded `fill` calls, so a
+multi-level sweep is atomic. Cost rounding is BY MAKER DIRECTION, mirroring `_fill`: maker-buy
+bids floor (`units·price/WAD`), maker-sell asks ceil. `--limit-tick` is the slippage bound —
+higher tick = higher price, so a buy keeps `tick ≤ limit` and a sell keeps `tick ≥ limit`.
+
+Preflight per fill: `[start, expiry]` window against the chain block time, SelfDeal
+(taker ≠ maker), `isRatifier` + `isRatified == RATIFIED`, and side-specific solvency:
+
+- **buy (take asks)**: a resting ask can only TRANSFER the maker's existing credit — `_moveClaim`
+  reverts `OnlyTakerMayBorrow` if the maker's balance would cross zero — so the client prechecks
+  `creditOf(maker) ≥ Σ planned units` per maker, approves the exact total cost, and postconditions
+  `creditOf` delta == +units and loan-token delta == −cost.
+- **sell (take bids)**: proceeds come from the bid maker's pre-funded `liquidityOf` (prechecked
+  per maker). **Maturity nuance**: a pure secondary transfer of existing credit is legal at/after
+  maturity — `MaturityPassed` only guards the origination branch — so the borrow-path matured
+  guard is deliberately NOT reused; the client instead requires `creditOf(taker) ≥ units` so the
+  fill can never slip into new-debt origination, and approves no collateral. Postconditions:
+  credit delta == −units, loan delta == +proceeds.
+
+`order cancel` = on-chain `setConsumed(group, offerCap, maker)` (cap = `maxAssets` when
+assets-capped else `maxUnits`; the authority — kills the signature forever, only the maker key may
+run it) + relayer DELETE when configured. A relayer delist failure is a warning, never an error.
+
+### Relayer wire protocol + fail-closed rules
+
+core-v2 ONLY (17-field domain-bound offers; `requireRelayerV2` rejects v1 profiles with a clear
+error). GET query = full market identity incl. `chainId`/`bivium` + `ratifier`; POST body
+`{offer, signature, commitment}` with bigints as decimal strings; DELETE body
+`{commitment, signature, offer}` where the signature is EIP-191 over
+`bivium-cancel:<lowercase commitment>` by the maker (the public Ratify signature cannot
+authenticate a cancel).
+
+Client-side revival is strict: every field type-checked, structural invariants enforced
+(units-xor-assets cap, tick grid, `start ≤ expiry ≤ maturity − 1h`), market identity must equal
+the requested market, and the commitment is RECOMPUTED via the profile's lineage adapter and must
+match the embedded one. Any bad row → the WHOLE response is `{ok:false, reason}`; expired-window
+offers are merely skipped. `{ok:false}` (relayer down/poisoned) is kept distinct from
+`{ok:true, offers:[]}` (healthy empty book); the CLI renders the former as
+"relayer unavailable — not an empty book" and exits 1. Tests drive the client against an
+in-process `node:http` stub (`test/helpers/relayer-stub.ts`) implementing the observed protocol,
+including commitment-tamper poisoning and cancel-signer auth; the same stub backs the recorded
+anvil e2e (`--publish` → `book list --source relayer` → `order cancel` delist → stub down →
+loud failure).

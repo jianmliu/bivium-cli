@@ -48,6 +48,8 @@ export interface DeploymentProfile {
   core: Address;
   signatureRatifier: Address;
   rpcUrl: string;
+  /** Optional signed-offer relayer origin (http(s)); enables `--source relayer` and `--publish`. */
+  relayerUrl?: string;
   tokens?: Record<string, TokenInfo>;
   tbv?: TbvSection;
 }

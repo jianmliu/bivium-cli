@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // bivium — CLI over the Bivium SDK (core-v1 lineage). See docs/spec/2026-08-09-bivium-cli-spec.md.
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -24,6 +25,21 @@ import {
   TbvClient,
   RATIFIED,
   ZERO_ADDRESS,
+  aggregateLevels,
+  entryFromSignedOffer,
+  fetchRelayerBook,
+  offerCap,
+  publishSignedOffer,
+  remainingFace,
+  requireRelayerV2,
+  simpleAprBpsFromPrice,
+  sortSide,
+  TradeClient,
+  type BookEntry,
+  type DepthLevel,
+  type RelayerDomain,
+  type TradePlan,
+  type TradePlanRequest,
   type Address,
   type DeploymentProfile,
   type Hex,
@@ -40,8 +56,13 @@ usage: bivium <command> [options]
   maker set-ratifier [--off]
   maker fund --assets <human>
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
-  maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human> [--ttl <s>] [--out <file>]
+  maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human> [--ttl <s>] [--out <file>] [--publish]
   offer status --offer <file>
+  book list [market flags] [--depth N] (--source files --dir <path> | --source relayer)
+  trade buy (--units <human> | --spend <human> [--exact-spend]) [--limit-tick <n>] [--dry-run] (--source …)
+  trade sell --units <human> [--limit-tick <n>] [--dry-run] (--source …)
+  order list --maker <addr> [market flags] (--source …)
+  order cancel --offer <file>
   borrow quote --offer <file> [--units <human>]
   borrow execute --offer <file> --units <human> [--receiver <addr>]
   repay (--offer <file> | market flags) --assets <human>
@@ -90,6 +111,15 @@ const OPTIONS = {
   "token-id": { type: "string" },
   "position-id": { type: "string" },
   deadline: { type: "string" },
+  depth: { type: "string" },
+  source: { type: "string" },
+  dir: { type: "string" },
+  spend: { type: "string" },
+  "exact-spend": { type: "boolean", default: false },
+  "limit-tick": { type: "string" },
+  "dry-run": { type: "boolean", default: false },
+  publish: { type: "boolean", default: false },
+  maker: { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -178,6 +208,127 @@ function rawBigInt(value: string | undefined, flag: string): bigint {
   const v = need(value, flag);
   if (!/^\d+$/.test(v)) fail(`--${flag} must be a non-negative integer`);
   return BigInt(v);
+}
+
+function relayerDomain(profile: DeploymentProfile): RelayerDomain {
+  if (!profile.relayerUrl) fail("profile has no relayerUrl — the relayer book source is unavailable");
+  requireRelayerV2(profile.abiProfile);
+  return {
+    chainId: profile.chainId,
+    core: profile.core,
+    abiProfile: profile.abiProfile,
+    signatureRatifier: profile.signatureRatifier,
+    relayerUrl: profile.relayerUrl,
+  };
+}
+
+/**
+ * Assemble the signed book for one market from the chosen source. `files` loads every *.json
+ * SignedOfferFile in --dir (each strictly validated against the profile; other markets skipped),
+ * `relayer` GETs the profile's relayerUrl and FAILS on {ok:false} — a down relayer is not an
+ * empty book.
+ */
+async function loadBookEntries(ctx: Ctx, params: MarketParams): Promise<{ entries: BookEntry[]; source: string }> {
+  const source = (ctx.values.source as string | undefined) ?? (ctx.profile.relayerUrl ? "relayer" : undefined);
+  if (source === "files") {
+    const dir = need(ctx.values.dir as string | undefined, "dir");
+    const c = client(ctx, false);
+    const wantId = c.marketId(params);
+    const entries: BookEntry[] = [];
+    for (const name of readdirSync(dir).filter((n) => n.endsWith(".json")).sort()) {
+      const path = join(dir, name);
+      let parsed;
+      try {
+        parsed = parseSignedOfferFile(readFileSync(path, "utf8"), ctx.profile);
+      } catch (error) {
+        fail(`invalid signed-offer file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (c.marketId(marketParamsFromOffer(parsed.offer)) !== wantId) continue; // different market
+      entries.push(entryFromSignedOffer(parsed.offer, parsed.commitment, parsed.signature));
+    }
+    return { entries, source: `files:${dir}` };
+  }
+  if (source === "relayer") {
+    const domain = relayerDomain(ctx.profile);
+    const result = await fetchRelayerBook(domain, params);
+    if (!result.ok) fail(`relayer unavailable — not an empty book: ${result.reason}`);
+    return { entries: result.entries, source: domain.relayerUrl };
+  }
+  fail("pick a book source: --source files --dir <path>, or --source relayer (needs profile.relayerUrl)");
+}
+
+function parseLimitTick(value: string | boolean | undefined): bigint | undefined {
+  if (typeof value !== "string") return undefined;
+  if (!/^\d+$/.test(value)) fail("--limit-tick must be a non-negative integer tick");
+  return BigInt(value);
+}
+
+function renderLevels(levels: DepthLevel[], loanDecimals: number, term: bigint): string[] {
+  return levels.map((l) => {
+    const apr = term > 0n && l.price > 0n && l.price <= 10n ** 18n ? `${Number(simpleAprBpsFromPrice(l.price, term)) / 100}%` : "-";
+    const makers = [...new Set(l.entries.map((e) => e.maker))].join(",");
+    return `  tick ${l.tick}  price ${formatAmount(l.price, 18)}  APR ${apr}  face ${formatAmount(l.size, loanDecimals)}  cum ${formatAmount(l.cumulative, loanDecimals)}  ${makers}`;
+  });
+}
+
+function renderPlan(plan: TradePlan, loanDecimals: number): string[] {
+  const verb = plan.side === "ask" ? "buy" : "sell";
+  const lines = plan.takes.map(
+    ({ entry, units }) =>
+      `  ${verb} ${formatAmount(units, loanDecimals)} face @ tick ${entry.offer.tick} (price ${formatAmount(entry.price, 18)}) from ${entry.maker} — ${entry.commitment.slice(0, 10)}…`,
+  );
+  lines.push(
+    `  total: ${formatAmount(plan.totalUnits, loanDecimals)} face ${plan.side === "ask" ? "for" : "yielding"} ${formatAmount(plan.totalCost, loanDecimals)} loan tokens` +
+      (plan.worstTick !== undefined ? ` (worst tick ${plan.worstTick})` : ""),
+  );
+  return lines;
+}
+
+async function runTrade(ctx: Ctx, side: "buy" | "sell"): Promise<void> {
+  const { params, loanDecimals } = await resolveMarket(ctx);
+  const { entries, source } = await loadBookEntries(ctx, params);
+  const v = ctx.values;
+  const request: TradePlanRequest = {
+    units: typeof v.units === "string" ? parseAmount(v.units, loanDecimals) : undefined,
+    spend: typeof v.spend === "string" ? parseAmount(v.spend, loanDecimals) : undefined,
+    exactSpend: v["exact-spend"] === true,
+    limitTick: parseLimitTick(v["limit-tick"]),
+  };
+  const dryRun = v["dry-run"] === true;
+  const tc = new TradeClient(ctx.profile, dryRun ? undefined : loadKeyAccount(ctx.keyEnv));
+  const plan = side === "buy" ? await tc.planBuy(entries, request) : await tc.planSell(entries, request);
+  if (plan.takes.length === 0) fail(`no fillable ${side === "buy" ? "asks" : "bids"} in the book (source ${source})`);
+  if (dryRun) {
+    output(ctx.json, { dryRun: true, source, plan: planJson(plan) }, [`plan (dry run, book source ${source}):`, ...renderPlan(plan, loanDecimals)].join("\n"));
+    return;
+  }
+  console.error([`plan (book source ${source}):`, ...renderPlan(plan, loanDecimals)].join("\n"));
+  const result = await tc.executePlan(plan);
+  output(
+    ctx.json,
+    { ...planJson(plan), hash: result.hash, gasUsed: result.gasUsed, blockNumber: result.blockNumber, creditDelta: result.creditDelta, loanDelta: result.loanDelta },
+    [
+      `${side === "buy" ? "bought" : "sold"} ${formatAmount(plan.totalUnits, loanDecimals)} DCN face across ${plan.takes.length} fill(s) in one multicall — tx ${result.hash}`,
+      `  credit delta: ${formatAmount(result.creditDelta, loanDecimals)} (exact)`,
+      `  loan-token delta: ${formatAmount(result.loanDelta, loanDecimals)} (exact)`,
+    ].join("\n"),
+  );
+}
+
+function planJson(plan: TradePlan): Record<string, unknown> {
+  return {
+    side: plan.side,
+    totalUnits: plan.totalUnits,
+    totalCost: plan.totalCost,
+    worstTick: plan.worstTick,
+    takes: plan.takes.map(({ entry, units }) => ({
+      commitment: entry.commitment,
+      maker: entry.maker,
+      tick: entry.offer.tick,
+      price: entry.price,
+      units,
+    })),
+  };
 }
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -307,14 +458,108 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const file = buildSignedOfferFile(ctx.profile, offer, commitment, signature);
     const path = typeof ctx.values.out === "string" ? ctx.values.out : `offer-${commitment.slice(2, 10)}.json`;
     writeFileSync(path, JSON.stringify(file, null, 2) + "\n");
+    let published = false;
+    if (ctx.values.publish === true) {
+      // publishSignedOffer/relayerDomain reject core-v1 (wire protocol is 17-field domain-bound)
+      // and a missing relayerUrl with clear errors before anything is sent.
+      await publishSignedOffer(relayerDomain(ctx.profile), offer, signature);
+      published = true;
+    }
     output(
       ctx.json,
-      { path, commitment, tick, price: tickToPrice(tick), ratifierRegistered: status.ratifierRegistered },
+      { path, commitment, tick, price: tickToPrice(tick), ratifierRegistered: status.ratifierRegistered, published },
       [
         `offer written to ${path}`,
         `  commitment: ${commitment}`,
         `  tick ${tick} → price ${formatAmount(tickToPrice(tick), 18)}`,
         status.ratifierRegistered ? `  ratifier registered ✓` : `  WARNING: maker has not run \`maker set-ratifier\` yet`,
+        ...(published ? [`  published to relayer ${ctx.profile.relayerUrl}`] : []),
+      ].join("\n"),
+    );
+  },
+
+  "book list": async (ctx) => {
+    const { params, loanDecimals } = await resolveMarket(ctx);
+    const { entries, source } = await loadBookEntries(ctx, params);
+    const tc = new TradeClient(ctx.profile);
+    const live = await tc.reconcileBook(entries);
+    const depth = typeof ctx.values.depth === "string" ? Number(ctx.values.depth) : 10;
+    if (!Number.isInteger(depth) || depth <= 0) fail("--depth must be a positive integer");
+    const asks = aggregateLevels(sortSide(live, "ask")).slice(0, depth);
+    const bids = aggregateLevels(sortSide(live, "bid")).slice(0, depth);
+    const block = await tc.pub.getBlock();
+    const term = params.maturity > block.timestamp ? params.maturity - block.timestamp : 0n;
+    output(
+      ctx.json,
+      {
+        source,
+        marketId: tc.marketId(params),
+        asks: asks.map((l) => ({ tick: l.tick, price: l.price, size: l.size, cumulative: l.cumulative, makers: [...new Set(l.entries.map((e) => e.maker))] })),
+        bids: bids.map((l) => ({ tick: l.tick, price: l.price, size: l.size, cumulative: l.cumulative, makers: [...new Set(l.entries.map((e) => e.maker))] })),
+      },
+      [
+        `book for market ${tc.marketId(params)} (source ${source})`,
+        `ASKS (makers selling credit — best price first):`,
+        ...(asks.length ? renderLevels(asks, loanDecimals, term) : ["  (empty)"]),
+        `BIDS (makers buying credit — best price first):`,
+        ...(bids.length ? renderLevels(bids, loanDecimals, term) : ["  (empty)"]),
+      ].join("\n"),
+    );
+  },
+
+  "trade buy": async (ctx) => await runTrade(ctx, "buy"),
+
+  "trade sell": async (ctx) => await runTrade(ctx, "sell"),
+
+  "order list": async (ctx) => {
+    const { params, loanDecimals } = await resolveMarket(ctx);
+    const maker = getAddress(need(ctx.values.maker as string | undefined, "maker")) as Address;
+    const { entries, source } = await loadBookEntries(ctx, params);
+    const mine = entries.filter((e) => e.maker.toLowerCase() === maker.toLowerCase());
+    const c = client(ctx, false);
+    const block = await c.pub.getBlock();
+    const rows = await Promise.all(
+      mine.map(async (e) => {
+        const consumed = await c.consumed(maker, e.offer.group);
+        const cap = offerCap(e.offer);
+        return {
+          commitment: e.commitment,
+          side: e.side,
+          tick: e.offer.tick,
+          price: e.price,
+          consumed,
+          cap,
+          remainingFace: remainingFace(e.offer, consumed, e.price),
+          withinWindow: block.timestamp >= e.offer.start && block.timestamp <= e.offer.expiry,
+        };
+      }),
+    );
+    output(
+      ctx.json,
+      { source, maker, orders: rows },
+      [
+        `${rows.length} resting order(s) by ${maker} (source ${source})`,
+        ...rows.map(
+          (r) =>
+            `  ${r.side.toUpperCase()} tick ${r.tick}  consumed ${r.consumed}/${r.cap}${r.consumed >= r.cap ? " (DEAD)" : ""}  remaining face ${formatAmount(r.remainingFace, loanDecimals)}  window ${r.withinWindow ? "open" : "CLOSED"}  ${r.commitment}`,
+        ),
+      ].join("\n"),
+    );
+  },
+
+  "order cancel": async (ctx) => {
+    const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+    const tc = new TradeClient(ctx.profile, loadKeyAccount(ctx.keyEnv));
+    const r = await tc.cancelOffer(file);
+    const relayerNote = r.relayer === "deleted" ? "relayer copy delisted" : r.relayer === "skipped" ? "no relayer configured" : `WARNING: relayer delist failed (${r.relayer.failed}) — on-chain cancel is the authority`;
+    output(
+      ctx.json,
+      { commitment: file.commitment, cap: r.cap, consumedBefore: r.consumedBefore, hash: r.tx?.hash, relayer: r.relayer },
+      [
+        r.tx
+          ? `offer ${file.commitment} cancelled on-chain: consumed pinned to cap ${r.cap} — tx ${r.tx.hash}`
+          : `offer ${file.commitment} already dead on-chain (consumed ${r.consumedBefore} ≥ cap ${r.cap})`,
+        `  ${relayerNote}`,
       ].join("\n"),
     );
   },

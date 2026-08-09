@@ -7,5 +7,8 @@ export * from "./offer.ts";
 export * from "./ratify.ts";
 export * from "./abi.ts";
 export * from "./client.ts";
+export * from "./orderbook.ts";
+export * from "./relayer.ts";
+export * from "./trade.ts";
 export * from "./profile.ts";
 export * from "./tbv.ts";
