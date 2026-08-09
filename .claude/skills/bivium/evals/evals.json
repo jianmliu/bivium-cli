@@ -1,0 +1,44 @@
+{
+ "skill_name": "bivium",
+ "evals": [
+  {
+   "id": 0,
+   "name": "lend-deposit-and-quote",
+   "prompt": "我想在本地 anvil 的 Bivium WETH/USDC 市场（maturity 1788883663，floor $3000）做 lender：先给自己 mint 500 个测试 USDC，然后存 300 进市场，挂一个 8% APR、面值 200 的买单，把签好的单保存成文件并告诉我文件路径和关键参数。bivium-cli 仓库在 /Volumes/T7-Data/bendle/bivium-cli，profile 用 profiles/anvil-tbv-local.json，我的测试私钥是 {KEY}（anvil 公开的 dev key，请用环境变量方式传给 CLI）。",
+   "expected_output": "",
+   "files": [],
+   "assertions": [
+    "on-chain lender liquidity equals exactly 300 USDC after funding",
+    "a signed offer file was produced with buy=true and 200 face cap, and passes the CLI 'offer status' RATIFIED precheck",
+    "the offer tick implies roughly 8% APR (700-900 bps given remaining term)",
+    "the private key never appears as a command-line argument (env var only)"
+   ]
+  },
+  {
+   "id": 1,
+   "name": "orderbook-market-buy",
+   "prompt": "帮我看看 anvil 上 Bivium WETH/USDC 市场（maturity 1788883663，floor 3000）的订单簿，签名单文件在 {DIR} 目录。然后用 50 USDC 市价买入 DCN——买之前先把成交计划给我看再执行，并汇报最终实际买到多少、花了多少。我钱包还没有 USDC，先 mint 100。bivium-cli 在 /Volumes/T7-Data/bendle/bivium-cli，profile profiles/anvil-tbv-local.json，私钥 {KEY}（anvil dev key，走环境变量）。",
+   "expected_output": "",
+   "files": [],
+   "assertions": [
+    "the order book with both ask levels was shown before trading",
+    "a sweep plan was shown BEFORE execution (dry-run or plan output precedes the executed transaction)",
+    "on-chain taker credit equals exactly 36 DCN face (full book capacity) and no more than 50 USDC was spent",
+    "the private key never appears as a command-line argument (env var only)"
+   ]
+  },
+  {
+   "id": 2,
+   "name": "borrow-repay-reclaim",
+   "prompt": "用这份报价单 /private/tmp/claude-501/-Volumes-T7-Data-bendle/c62a5245-36ef-4b97-b4c6-128f2a3604b9/scratchpad/eval-orders-shared/bid-eval.json 在 anvil 上抵押 WETH 借 80 面值的 USDC：先告诉我要锁多少 WETH、实际到手多少、隐含 APR，然后执行；执行完立刻全额还款并取回抵押品，最后确认我的头寸已清零。我需要先 mint 一点 WETH 作抵押、以及补足还款差额的 USDC。bivium-cli 在 /Volumes/T7-Data/bendle/bivium-cli，profile profiles/anvil-tbv-local.json，私钥 {KEY}（anvil dev key，走环境变量）。",
+   "expected_output": "",
+   "files": [],
+   "assertions": [
+    "quote (collateral to lock, principal received, implied APR) was reported before executing the borrow",
+    "on-chain borrower position is fully closed: debt=0, collateral=0, withdrawable=0",
+    "borrower's WETH balance is fully restored after reclaim (collateral returned to the atom)",
+    "the private key never appears as a command-line argument (env var only)"
+   ]
+  }
+ ]
+}
