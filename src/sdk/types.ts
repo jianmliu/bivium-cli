@@ -53,6 +53,7 @@ export interface DeploymentProfile {
   tokens?: Record<string, TokenInfo>;
   tbv?: TbvSection;
   gasFaucet?: Address;
+  gasApi?: string;
 }
 
 export interface MarketState {

@@ -74,7 +74,7 @@ usage: bivium <command> [options]
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
-  wallet gas --to <addr>              # third-party claim from the profile gasFaucet
+  wallet gas --to <addr> [--via-api]  # third-party claim; --via-api needs no local key at all
 
   tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]   (key must be redemption issuer)
   tbv vault-status --token-id <n>
@@ -115,6 +115,7 @@ const OPTIONS = {
   to: { type: "string" },
   amount: { type: "string" },
   off: { type: "boolean", default: false },
+  "via-api": { type: "boolean", default: false },
   "token-id": { type: "string" },
   "position-id": { type: "string" },
   deadline: { type: "string" },
@@ -776,9 +777,23 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "wallet gas": async (ctx) => {
+    const to = getAddress(need(ctx.values.to as string | undefined, "to")) as Address;
+    if (ctx.values["via-api"] === true) {
+      // Keyless path: the relayer-side claimer submits claim(to); nothing is signed locally.
+      const api = ctx.profile.gasApi;
+      if (!api) fail("profile has no gasApi URL — cannot claim via API");
+      const res = await fetch(api, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) fail(`gas API refused (${res.status}): ${JSON.stringify(data)}`);
+      output(ctx.json, data, `dripped via API to ${to}: ${String(data.hash ?? "(no hash returned)")}`);
+      return;
+    }
     const faucet = ctx.profile.gasFaucet;
     if (!faucet) fail("profile has no gasFaucet address");
-    const to = getAddress(need(ctx.values.to as string | undefined, "to")) as Address;
     const c = client(ctx, true);
     const [drip, nextAt, globalAt] = await Promise.all([
       c.pub.readContract({ address: faucet, abi: gasFaucetAbi, functionName: "DRIP" }),

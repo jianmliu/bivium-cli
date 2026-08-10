@@ -45,7 +45,8 @@ only pays the tiny claim gas; the drip comes from the faucet contract:
 ```bash
 npm run cli --silent -- wallet create --out agent.key        # new key, file mode 0600
 ADDR=$(npm run cli --silent -- wallet address --key-file agent.key)
-npm run cli --silent -- wallet gas --to $ADDR                # signed by BIVIUM_PK (operator)
+npm run cli --silent -- wallet gas --to $ADDR --via-api      # keyless: the relayer claims for you
+# (or without --via-api if an operator key is available in BIVIUM_PK)
 # then run any command as the fresh wallet with --key-file agent.key
 ```
 

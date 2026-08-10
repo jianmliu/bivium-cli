@@ -50,6 +50,9 @@ export function loadProfile(path: string): DeploymentProfile {
     };
   }
   const gasFaucet = raw.gasFaucet === undefined ? undefined : requireAddress(raw.gasFaucet, "gasFaucet");
+  if (raw.gasApi !== undefined && (typeof raw.gasApi !== "string" || !/^https?:\/\//.test(raw.gasApi))) {
+    throw new Error("profile gasApi must be an http(s) URL");
+  }
   return {
     name: raw.name,
     abiProfile: raw.abiProfile,
@@ -61,6 +64,7 @@ export function loadProfile(path: string): DeploymentProfile {
     tokens,
     tbv,
     gasFaucet,
+    gasApi: raw.gasApi as string | undefined,
   };
 }
 
