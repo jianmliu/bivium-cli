@@ -114,7 +114,13 @@ Amounts are exact decimal strings in human units ("600", "0.01") — the CLI con
 token's exact decimals and rejects over-precision rather than rounding. Add `--json` whenever you
 need to parse output. In zsh, expand flag-bundles with `${=VAR}` (unquoted vars do not word-split).
 
-When a HUMAN is driving interactively, offer `maker wizard` instead of raw flags — it lists the
+When a HUMAN is driving interactively, offer `bivium wizard` instead of raw flags — one entry
+point covering all three intents (出借挂单 with funding assistance: auto-detects short escrow and
+offers mint/fund/set-ratifier; 抵押借款: pick a live bid, quote shown before execution, collateral
+minted with consent, repay deadline and command printed after; 交易 DCN: book display, plan shown
+before the sweep). For a quick position/order overview use `bivium portfolio [--account]` — it
+aggregates borrow positions, DCN holdings, escrow, and resting orders across all discovered
+markets. `maker wizard` remains as the lend-path alias — it lists the
 discovered markets (with moneyness/gated flags), prompts for amount and price, requires an
 explicit `yes-itm` on in-the-money markets, and confirms before signing. Agents keep using flags.
 
