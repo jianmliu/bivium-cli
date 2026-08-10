@@ -9,6 +9,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   adapterFor,
   BiviumClient,
+  discoverMarketsOnChain,
+  fetchRelayerMarkets,
+  floorFromStrike,
   createWalletFile,
   gasFaucetAbi,
   readKeyFile,
@@ -54,6 +57,7 @@ const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
 usage: bivium <command> [options]
 
+  market list [--source chain|relayer] [--from-block N]   # discover EXISTING markets — join, don't fragment
   market id|state       compute the market id / read MarketState
   read position|credit|liquidity --account <addr>
   maker set-ratifier [--off]
@@ -116,6 +120,7 @@ const OPTIONS = {
   amount: { type: "string" },
   off: { type: "boolean", default: false },
   "via-api": { type: "boolean", default: false },
+  "from-block": { type: "string" },
   "token-id": { type: "string" },
   "position-id": { type: "string" },
   deadline: { type: "string" },
@@ -344,6 +349,40 @@ function planJson(plan: TradePlan): Record<string, unknown> {
 }
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
+  "market list": async (ctx) => {
+    const c = client(ctx, false);
+    const source = typeof ctx.values.source === "string" ? ctx.values.source : "chain";
+    let markets;
+    if (source === "relayer") {
+      const result = await fetchRelayerMarkets(ctx.profile);
+      if (!result.ok) fail(`relayer market index unavailable — not an empty market set: ${result.reason}`);
+      if (result.suspiciousEmpty) {
+        fail("index reports full coverage but zero markets — likely a lineage mismatch between the index and this core; use --source chain");
+      }
+      markets = result.markets;
+    } else {
+      const fromBlock = typeof ctx.values["from-block"] === "string"
+        ? BigInt(ctx.values["from-block"])
+        : BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock — pass --from-block"));
+      markets = await discoverMarketsOnChain(c, { fromBlock });
+    }
+    const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
+    const lines: string[] = [];
+    const rows = [];
+    for (const m of markets) {
+      const loan = bySymbol.get(m.params.loanToken.toLowerCase());
+      const coll = bySymbol.get(m.params.collateralToken.toLowerCase());
+      const state = await c.marketState(m.id);
+      let floor = "?";
+      if (loan && coll) { try { floor = floorFromStrike(m.params.strike, loan.dec, coll.dec); } catch { floor = "(off-grid)"; } }
+      const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
+      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate });
+      lines.push(`${pair}  floor ${floor}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}\n    ${m.id}`);
+    }
+    output(ctx.json, { source, count: markets.length, markets: rows },
+      markets.length === 0 ? "no touched markets found in the scanned range" : lines.join("\n"));
+  },
+
   "market id": async (ctx) => {
     const { params } = await resolveMarket(ctx, false);
     const c = client(ctx, false);

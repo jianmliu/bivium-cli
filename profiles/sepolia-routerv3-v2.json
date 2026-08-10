@@ -7,5 +7,6 @@
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
   "tokens": {},
   "gasFaucet": "0xd018fC5B23Da5657e558A402EA3d9309a1707E02",
-  "gasApi": "https://dev.bivium.pages.dev/api/gas"
+  "gasApi": "https://dev.bivium.pages.dev/api/gas",
+  "coreDeploymentBlock": 11439363
 }

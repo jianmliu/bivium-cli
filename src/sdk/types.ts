@@ -54,6 +54,7 @@ export interface DeploymentProfile {
   tbv?: TbvSection;
   gasFaucet?: Address;
   gasApi?: string;
+  coreDeploymentBlock?: number;
 }
 
 export interface MarketState {

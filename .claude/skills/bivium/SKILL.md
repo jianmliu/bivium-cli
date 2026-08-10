@@ -66,6 +66,22 @@ profile points at the wrong core or the wrong encoding, and working around them 
 transactions against a deployment the client doesn't understand. That failure mode is real (two
 core lineages coexist on Sepolia), which is exactly why the check exists.
 
+## Discovery first — join markets, don't fragment them
+
+Before lending, borrowing, or quoting, list the markets that already exist and prefer joining one:
+
+```bash
+npm run cli --silent -- market list          # MarketTouched scan from the chain, lineage-verified
+```
+
+Every distinct parameter set (even a floor 100 apart) is a SEPARATE market with its own book and
+its own settlement pool — creating a new one splits liquidity and leaves both sides thinner.
+Create a new market identity only when the user explicitly wants terms nothing existing offers,
+and say so when you do. `[gated]` rows have an access-controlled gate; prefer ungated ones unless
+you know you pass the gate. `--source relayer` uses the hosted index instead of scanning; if it
+reports full coverage with zero markets, that is a lineage mismatch, not an empty chain — fall
+back to `--source chain`.
+
 ## Mental model (30 seconds)
 
 - A **market** is identified by its parameters (loan token, collateral token, maturity, strike,
@@ -85,6 +101,7 @@ need to parse output. In zsh, expand flag-bundles with `${=VAR}` (unquoted vars 
 ## Workflow: lend (存款借出)
 
 ```bash
+# pick B from `market list` output — join an existing market unless told otherwise
 B="--loan USDC --collateral WETH --maturity 1788828951 --floor 3000"   # market flags, reused below
 npm run cli --silent -- mock mint --token USDC --to <maker-addr> --amount 1000   # testnet only
 npm run cli --silent -- maker set-ratifier          # once per account per deployment

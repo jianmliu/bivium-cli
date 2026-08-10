@@ -53,6 +53,9 @@ export function loadProfile(path: string): DeploymentProfile {
   if (raw.gasApi !== undefined && (typeof raw.gasApi !== "string" || !/^https?:\/\//.test(raw.gasApi))) {
     throw new Error("profile gasApi must be an http(s) URL");
   }
+  if (raw.coreDeploymentBlock !== undefined && (typeof raw.coreDeploymentBlock !== "number" || !Number.isInteger(raw.coreDeploymentBlock) || raw.coreDeploymentBlock < 0)) {
+    throw new Error("profile coreDeploymentBlock must be a non-negative integer");
+  }
   return {
     name: raw.name,
     abiProfile: raw.abiProfile,
@@ -65,6 +68,7 @@ export function loadProfile(path: string): DeploymentProfile {
     tbv,
     gasFaucet,
     gasApi: raw.gasApi as string | undefined,
+    coreDeploymentBlock: raw.coreDeploymentBlock as number | undefined,
   };
 }
 

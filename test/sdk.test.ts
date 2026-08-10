@@ -83,3 +83,19 @@ test("signed offer file round-trips and rejects tampering", () => {
     /different core/,
   );
 });
+
+test("verifyTouchedMarket accepts chain-verified ids and rejects lineage mismatches", async () => {
+  const { verifyTouchedMarket } = await import("../src/sdk/discovery.ts");
+  const domain = { chainId: 11155111, core: "0x344BA9909d952D0d404f37Cc9C93c40A35F35c07" as const };
+  const params = {
+    loanToken: "0x1DbF8Dee40739cd2b17C12EC63A67499F9796278" as const,
+    collateralToken: "0x822c57AEf2766ddd9aA570B53bF2917f0cF07761" as const,
+    maturity: 1788828951n,
+    strike: 600000000000000000000000000000000000000n,
+    allowPartialRepay: false,
+    gate: "0x0000000000000000000000000000000000000000" as const,
+  };
+  const id = "0x1d707a4684f4882a3b0c41c31086e1b3c92b31415bf8f492b310aed876f5bfed" as const;
+  verifyTouchedMarket("core-v1", domain, id, params); // chain-verified WBTC market
+  assert.throws(() => verifyTouchedMarket("core-v2", domain, id, params), /lineage mismatch/);
+});
