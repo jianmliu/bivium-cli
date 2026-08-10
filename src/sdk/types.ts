@@ -52,6 +52,7 @@ export interface DeploymentProfile {
   relayerUrl?: string;
   tokens?: Record<string, TokenInfo>;
   tbv?: TbvSection;
+  gasFaucet?: Address;
 }
 
 export interface MarketState {

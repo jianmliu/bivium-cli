@@ -49,6 +49,7 @@ export function loadProfile(path: string): DeploymentProfile {
       redemptionAsset: requireAddress(t.redemptionAsset, "tbv.redemptionAsset"),
     };
   }
+  const gasFaucet = raw.gasFaucet === undefined ? undefined : requireAddress(raw.gasFaucet, "gasFaucet");
   return {
     name: raw.name,
     abiProfile: raw.abiProfile,
@@ -59,6 +60,7 @@ export function loadProfile(path: string): DeploymentProfile {
     relayerUrl: raw.relayerUrl as string | undefined,
     tokens,
     tbv,
+    gasFaucet,
   };
 }
 

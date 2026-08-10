@@ -9,6 +9,7 @@ import {
   type Chain,
 } from "viem";
 import { erc20Abi } from "./abi.ts";
+import { gasFaucetAbi } from "./wallet.ts";
 import { adapterFor, type ChainDomain, type LineageAdapter } from "./lineage.ts";
 import { collateralForDebt, principalForUnits } from "./math.ts";
 import { marketParamsFromOffer } from "./offer.ts";
@@ -239,6 +240,11 @@ export class BiviumClient {
 
   private writeCore(functionName: string, args: readonly unknown[]): Promise<TxResult> {
     return this.write({ address: this.profile.core, abi: this.adapter.coreAbi, functionName, args });
+  }
+
+  /** Third-party gas claim from a GasFaucet — the operator key only pays claim gas. */
+  async claimGas(faucet: Address, to: Address): Promise<TxResult> {
+    return await this.write({ address: faucet, abi: gasFaucetAbi, functionName: "claim", args: [to] });
   }
 
   /** Exact-amount approval — never unlimited. */

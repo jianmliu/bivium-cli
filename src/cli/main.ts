@@ -9,6 +9,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   adapterFor,
   BiviumClient,
+  createWalletFile,
+  gasFaucetAbi,
+  readKeyFile,
   buildSignedOfferFile,
   formatAmount,
   loadProfile,
@@ -69,6 +72,9 @@ usage: bivium <command> [options]
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
   mock mint --token <symbol|addr> --to <addr> --amount <human>
+  wallet create [--out <file>]        # throwaway wallet, key file mode 0600
+  wallet address|balance [--key-file <f> | --account <addr>]
+  wallet gas --to <addr>              # third-party claim from the profile gasFaucet
 
   tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]   (key must be redemption issuer)
   tbv vault-status --token-id <n>
@@ -85,6 +91,7 @@ global:       --profile <path> (or BIVIUM_PROFILE) [--key-env NAME] [--json]`;
 const OPTIONS = {
   profile: { type: "string" },
   "key-env": { type: "string", default: "BIVIUM_PK" },
+  "key-file": { type: "string" },
   json: { type: "boolean", default: false },
   offer: { type: "string" },
   loan: { type: "string" },
@@ -136,11 +143,15 @@ function output(json: boolean, data: Record<string, unknown>, human: string): vo
   console.log(json ? JSON.stringify(data, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2) : human);
 }
 
-function loadKeyAccount(keyEnv: string) {
+function loadKeyAccount(keyEnv: string, keyFile?: string) {
+  if (keyFile) return privateKeyToAccount(readKeyFile(keyFile));
   const raw = process.env[keyEnv];
-  if (!raw) fail(`signing key required: set ${keyEnv} (or pass --key-env NAME)`);
+  if (!raw) fail(`signing key required: set ${keyEnv} (or pass --key-env NAME / --key-file <path>)`);
   if (!/^0x[0-9a-fA-F]{64}$/.test(raw)) fail(`${keyEnv} is not a 32-byte hex private key`);
   return privateKeyToAccount(raw as Hex);
+}
+function accountFor(ctx: Ctx) {
+  return loadKeyAccount(ctx.keyEnv, ctx.values["key-file"] as string | undefined);
 }
 
 interface Ctx {
@@ -196,7 +207,7 @@ async function resolveMarket(ctx: Ctx, needDecimals = true): Promise<{ params: M
 }
 
 function client(ctx: Ctx, signing: boolean): BiviumClient {
-  return new BiviumClient(ctx.profile, signing ? loadKeyAccount(ctx.keyEnv) : undefined);
+  return new BiviumClient(ctx.profile, signing ? accountFor(ctx) : undefined);
 }
 
 function tbvClient(ctx: Ctx, signing: boolean): TbvClient {
@@ -431,7 +442,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       tick = priceToTick(price, side === "sell");
     }
     const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
-    const account = loadKeyAccount(ctx.keyEnv);
+    const account = accountFor(ctx);
     const offer: Offer = {
       ...params,
       maker: account.address as Address,
@@ -731,6 +742,54 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     if (!/^0x[0-9a-fA-F]{64}$/.test(positionId)) fail("--position-id must be a bytes32 hex value");
     const tx = await tbvClient(ctx, true).tbvRedeemDelivered(positionId as Hex);
     output(ctx.json, { ...tx }, `delivered vault released to keeper: ${tx.hash}`);
+  },
+
+  "wallet create": async (ctx) => {
+    const path = typeof ctx.values.out === "string" ? ctx.values.out : "bivium-wallet.key";
+    const { address } = createWalletFile(path);
+    output(ctx.json, { address, path }, [
+      `new wallet ${address}`,
+      `key file: ${path} (mode 0600 — never share or commit it)`,
+      `use it via --key-file ${path}; fund gas with: wallet gas --to ${address}`,
+    ].join("\n"));
+  },
+
+  "wallet address": async (ctx) => {
+    const account = accountFor(ctx);
+    output(ctx.json, { address: account.address }, account.address);
+  },
+
+  "wallet balance": async (ctx) => {
+    const c = client(ctx, false);
+    const account = (typeof ctx.values.account === "string"
+      ? getAddress(ctx.values.account)
+      : accountFor(ctx).address) as Address;
+    const eth = await c.pub.getBalance({ address: account });
+    const lines = [`${account}`, `  ETH: ${formatAmount(eth, 18)}`];
+    const balances: Record<string, string> = { eth: eth.toString() };
+    for (const [symbol, info] of Object.entries(ctx.profile.tokens ?? {})) {
+      const bal = await c.balanceOf(info.address, account);
+      balances[symbol] = bal.toString();
+      lines.push(`  ${symbol}: ${formatAmount(bal, info.decimals)}`);
+    }
+    output(ctx.json, { address: account, balances }, lines.join("\n"));
+  },
+
+  "wallet gas": async (ctx) => {
+    const faucet = ctx.profile.gasFaucet;
+    if (!faucet) fail("profile has no gasFaucet address");
+    const to = getAddress(need(ctx.values.to as string | undefined, "to")) as Address;
+    const c = client(ctx, true);
+    const [drip, nextAt, globalAt] = await Promise.all([
+      c.pub.readContract({ address: faucet, abi: gasFaucetAbi, functionName: "DRIP" }),
+      c.pub.readContract({ address: faucet, abi: gasFaucetAbi, functionName: "nextClaimAt", args: [to] }),
+      c.pub.readContract({ address: faucet, abi: gasFaucetAbi, functionName: "globalNextClaimAt" }),
+    ]);
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (nextAt > now) fail(`recipient cooldown active until ${nextAt} (unix)`);
+    if (globalAt > now) fail(`global claim interval active until ${globalAt} (unix) — retry shortly`);
+    const tx = await c.claimGas(faucet, to);
+    output(ctx.json, { ...tx, drip }, `dripped ${formatAmount(drip, 18)} ETH to ${to}: ${tx.hash}`);
   },
 
   "mock mint": async (ctx) => {

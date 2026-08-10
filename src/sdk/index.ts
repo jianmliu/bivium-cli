@@ -12,3 +12,4 @@ export * from "./relayer.ts";
 export * from "./trade.ts";
 export * from "./profile.ts";
 export * from "./tbv.ts";
+export * from "./wallet.ts";

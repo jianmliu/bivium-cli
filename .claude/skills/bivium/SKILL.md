@@ -38,6 +38,21 @@ from an account index or the prompt (`cast wallet address --private-key "$BIVIUM
 for well-known local dev keys; both baseline agents in testing guessed the index, minted to the
 wrong address, and burned a reverted transaction discovering it).
 
+**Prefer a throwaway wallet over importing a key.** When no key is provided (or you'd rather not
+handle one), generate a fresh wallet and fund its gas from the on-chain faucet — an operator key
+only pays the tiny claim gas; the drip comes from the faucet contract:
+
+```bash
+npm run cli --silent -- wallet create --out agent.key        # new key, file mode 0600
+ADDR=$(npm run cli --silent -- wallet address --key-file agent.key)
+npm run cli --silent -- wallet gas --to $ADDR                # signed by BIVIUM_PK (operator)
+# then run any command as the fresh wallet with --key-file agent.key
+```
+
+The Sepolia profiles carry the faucet address (`gasFaucet`); drips are 0.01 ETH with a 6h
+per-recipient cooldown, and recipients already holding ≥0.05 ETH are refused. Never commit or
+share a key file.
+
 Sanity-check connectivity and the profile before doing anything else:
 
 ```bash

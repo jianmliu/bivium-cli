@@ -40,6 +40,16 @@ npm run cli -- market state --offer bid.json
 npm run cli -- read position --offer bid.json --account 0x...
 ```
 
+## Throwaway wallets and gas
+
+Agents should not import long-lived keys. Generate a wallet and fund it from the on-chain Sepolia
+gas faucet (`wallet create` / `wallet address` / `wallet balance` / `wallet gas --to <addr>`): the
+faucet contract (profile `gasFaucet`) holds the corpus behind on-chain rate limits (0.01 ETH drip,
+6h per-recipient cooldown, 60s global interval, rich-recipient gate, no owner/withdrawal path);
+`claim(to)` is third-party callable, so the operator key that triggers it only ever pays claim gas.
+Fund the faucet by plain ETH transfer to its address. Key files are written mode 0600 and loaded
+via `--key-file` with a permissions check.
+
 ## Safety model (enforced in the SDK)
 
 - **Profile pinning, fail closed** — every run is scoped to a profile file pinning
