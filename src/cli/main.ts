@@ -9,9 +9,12 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   adapterFor,
   BiviumClient,
+  assessMoneyness,
   discoverMarketsOnChain,
   fetchRelayerMarkets,
+  fetchSpotUsd,
   floorFromStrike,
+  spotAssetFor,
   createWalletFile,
   gasFaucetAbi,
   readKeyFile,
@@ -63,7 +66,8 @@ usage: bivium <command> [options]
   maker set-ratifier [--off]
   maker fund --assets <human>
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
-  maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human> [--ttl <s>] [--out <file>] [--publish]
+  maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human>
+                   [--ttl <s>] [--out <file>] [--publish] [--acknowledge-itm]
   offer status --offer <file>
   book list [market flags] [--depth N] (--source files --dir <path> | --source relayer)
   trade buy (--units <human> | --spend <human> [--exact-spend]) [--limit-tick <n>] [--dry-run] (--source …)
@@ -121,6 +125,7 @@ const OPTIONS = {
   off: { type: "boolean", default: false },
   "via-api": { type: "boolean", default: false },
   "from-block": { type: "string" },
+  "acknowledge-itm": { type: "boolean", default: false },
   "token-id": { type: "string" },
   "position-id": { type: "string" },
   deadline: { type: "string" },
@@ -367,6 +372,12 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       markets = await discoverMarketsOnChain(c, { fromBlock });
     }
     const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
+    // Display-only spot for moneyness flags; one fetch per referenced asset, failures degrade to "?".
+    const spots = new Map<string, number | null>();
+    for (const m of markets) {
+      const asset = spotAssetFor(bySymbol.get(m.params.collateralToken.toLowerCase())?.sym);
+      if (asset && !spots.has(asset)) spots.set(asset, await fetchSpotUsd(asset));
+    }
     const lines: string[] = [];
     const rows = [];
     for (const m of markets) {
@@ -375,9 +386,13 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       const state = await c.marketState(m.id);
       let floor = "?";
       if (loan && coll) { try { floor = floorFromStrike(m.params.strike, loan.dec, coll.dec); } catch { floor = "(off-grid)"; } }
+      const asset = spotAssetFor(coll?.sym);
+      const spot = asset ? spots.get(asset) ?? null : null;
+      const money = spot !== null && floor !== "?" && floor !== "(off-grid)" ? assessMoneyness(floor, spot) : null;
+      const moneyLabel = money === null ? "" : money.itm ? `  floor/spot ${money.ratio.toFixed(2)} [ITM ⚠ lending near par is a guaranteed loss]` : `  floor/spot ${money.ratio.toFixed(2)} OTM`;
       const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
-      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate });
-      lines.push(`${pair}  floor ${floor}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}\n    ${m.id}`);
+      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money });
+      lines.push(`${pair}  floor ${floor}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}${moneyLabel}\n    ${m.id}`);
     }
     output(ctx.json, { source, count: markets.length, markets: rows },
       markets.length === 0 ? "no touched markets found in the scanned range" : lines.join("\n"));
@@ -464,9 +479,26 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "maker make-offer": async (ctx) => {
-    const { params, loanDecimals } = await resolveMarket(ctx);
+    const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
     const side = need(ctx.values.side as string | undefined, "side");
     if (side !== "buy" && side !== "sell") fail("--side must be buy or sell");
+    if (side === "buy") {
+      // Economic guardrail (display-only spot, never part of the offer): a buy bid on a market
+      // whose floor sits at/above spot buys collateral above market — the borrower's rational
+      // strategy is to default, so a near-par lend price is a guaranteed loss.
+      const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === params.collateralToken);
+      const asset = spotAssetFor(collInfo?.[0]);
+      if (asset) {
+        const spot = await fetchSpotUsd(asset);
+        let floorHuman: string | null = null;
+        try { floorHuman = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { floorHuman = null; }
+        const money = spot !== null && floorHuman !== null ? assessMoneyness(floorHuman, spot) : null;
+        if (money?.itm && ctx.values["acknowledge-itm"] !== true) {
+          fail(`this market's floor (${floorHuman}) is ${((money.ratio - 1) * 100).toFixed(1)}% ABOVE ${asset} spot (${spot}) — your bid would buy collateral above market and the borrower's rational strategy is to default. Pass --acknowledge-itm to quote anyway.`);
+        }
+        if (money === null) console.error("note: spot unavailable — cannot assess floor moneyness for this bid");
+      }
+    }
     const maxUnits = parseAmount(need(ctx.values["max-units"] as string | undefined, "max-units"), loanDecimals);
     const now = BigInt(Math.floor(Date.now() / 1000));
     let tick: bigint;

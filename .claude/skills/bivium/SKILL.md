@@ -76,6 +76,13 @@ npm run cli --silent -- market list          # MarketTouched scan from the chain
 
 Every distinct parameter set (even a floor 100 apart) is a SEPARATE market with its own book and
 its own settlement pool — creating a new one splits liquidity and leaves both sides thinner.
+
+Read the `floor/spot` column before quoting. A floor at/above spot (`[ITM ⚠]`) means the
+borrower's rational strategy is to keep the principal and deliver the collateral — lending near
+par there is a guaranteed loss, and `make-offer --side buy` will refuse unless you pass
+`--acknowledge-itm` (only do that when the user explicitly wants an in-the-money quote and
+understands they are buying collateral above market). Prefer OTM markets (floor below spot);
+spot is a display-only reference and never enters the offer itself.
 Create a new market identity only when the user explicitly wants terms nothing existing offers,
 and say so when you do. `[gated]` rows have an access-controlled gate; prefer ungated ones unless
 you know you pass the gate. `--source relayer` uses the hosted index instead of scanning; if it

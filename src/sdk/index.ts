@@ -14,3 +14,4 @@ export * from "./profile.ts";
 export * from "./tbv.ts";
 export * from "./wallet.ts";
 export * from "./discovery.ts";
+export * from "./spot.ts";

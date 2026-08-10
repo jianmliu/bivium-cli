@@ -99,3 +99,18 @@ test("verifyTouchedMarket accepts chain-verified ids and rejects lineage mismatc
   verifyTouchedMarket("core-v1", domain, id, params); // chain-verified WBTC market
   assert.throws(() => verifyTouchedMarket("core-v2", domain, id, params), /lineage mismatch/);
 });
+
+test("moneyness guardrail math", async () => {
+  const { assessMoneyness, spotAssetFor } = await import("../src/sdk/spot.ts");
+  // the live case that motivated this: $3000 floor vs $1912 ETH spot
+  const itm = assessMoneyness("3000", 1912.435);
+  assert.ok(itm && itm.itm && itm.ratio > 1.5);
+  // healthy OTM: $60000 floor vs $64948 BTC spot
+  const otm = assessMoneyness("60000", 64947.815);
+  assert.ok(otm && !otm.itm && otm.ratio < 1);
+  assert.equal(assessMoneyness("0", 100), null);
+  assert.equal(spotAssetFor("WETH"), "ETH");
+  assert.equal(spotAssetFor("vaultBTC"), "BTC");
+  assert.equal(spotAssetFor("GHO"), null);
+  assert.equal(spotAssetFor(undefined), null);
+});
