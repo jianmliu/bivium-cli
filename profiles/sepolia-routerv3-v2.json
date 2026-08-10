@@ -5,8 +5,30 @@
   "core": "0x3d60833577De4C4D1c73F4E5bF87Dd4Ced7a0C99",
   "signatureRatifier": "0x08C0aAd2F31F09377898Fdf3C5E5a21C3d6a87E8",
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
-  "tokens": {},
+  "tokens": {
+    "GHO": {
+      "address": "0x84b610ea0b055A6aD8475543C0A53fC9b66c0919",
+      "decimals": 18,
+      "mintable": true
+    },
+    "USDC": {
+      "address": "0x1DbF8Dee40739cd2b17C12EC63A67499F9796278",
+      "decimals": 6,
+      "mintable": true
+    },
+    "WETH": {
+      "address": "0x8E87161d2827613FE129daF8FA330460F95d629C",
+      "decimals": 18,
+      "mintable": true
+    },
+    "WBTC": {
+      "address": "0xfd5528653869701FB7d6831060F59B2013634002",
+      "decimals": 8,
+      "mintable": true
+    }
+  },
   "gasFaucet": "0xd018fC5B23Da5657e558A402EA3d9309a1707E02",
   "gasApi": "https://dev.bivium.pages.dev/api/gas",
-  "coreDeploymentBlock": 11439363
+  "coreDeploymentBlock": 11439363,
+  "relayerUrl": "https://dev.bivium.pages.dev/api"
 }

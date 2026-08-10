@@ -65,12 +65,12 @@ usage: bivium <command> [options]
 
   market list [--source chain|relayer] [--from-block N]   # discover EXISTING markets — join, don't fragment
   market id|state       compute the market id / read MarketState
-  portfolio [--account <addr>] [--dir <orders>]   # 全市场聚合：借款头寸/DCN/escrow/挂单
+  portfolio [--account <addr>] [--dir <orders>]   # aggregated positions/DCN/escrow/orders across all markets
   read position|credit|liquidity --account <addr>
   maker set-ratifier [--off]
   maker fund --assets <human>
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
-  maker wizard                        # 交互式挂单：选市场 → 输金额 → 输价格 → 确认签名
+  maker wizard                        # interactive quoting: pick market -> amount -> price -> confirm
   maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human>
                    [--ttl <s>] [--out <file>] [--publish] [--acknowledge-itm]
   offer status --offer <file>
@@ -88,7 +88,7 @@ usage: bivium <command> [options]
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
   wallet gas --to <addr> [--via-api]  # third-party claim; --via-api needs no local key at all
-  wizard                              # 交互式向导：出借 / 借款 / 交易 三条路
+  wizard                              # interactive wizard: lend / borrow / trade
 
   tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]   (key must be redemption issuer)
   tbv vault-status --token-id <n>
@@ -484,7 +484,7 @@ type Asker = ReturnType<typeof makeAsker>;
 
 async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Promise<WizardMarketRow> {
   const fromBlock = BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock"));
-  console.log("正在扫描链上已有市场（join，不要新建，避免流动性分散）…");
+  console.log("Scanning for existing on-chain markets (join, don't fragment liquidity)…");
   const markets = await discoverMarketsOnChain(c, { fromBlock });
   const now = BigInt(Math.floor(Date.now() / 1000));
   const active = markets.filter((m) => m.params.maturity > now);
@@ -513,7 +513,7 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     ].filter(Boolean).join(" ");
     rows.push({
       market: m,
-      label: `${collSym}/${loanSym}  floor ${floor}  到期 ${date}  在贷 ${formatAmount(state.activeCredit, loanDec)}  已还 ${formatAmount(state.repaidCredit, loanDec)}  ${flags}`,
+      label: `${collSym}/${loanSym}  floor ${floor}  matures ${date}  active ${formatAmount(state.activeCredit, loanDec)}  repaid ${formatAmount(state.repaidCredit, loanDec)}  ${flags}`,
       itm: money?.itm === true,
       loanDec,
       collDec,
@@ -522,7 +522,7 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     });
   }
   rows.forEach((r, i) => console.log(`  [${i + 1}] ${r.label}`));
-  const pick = Number((await rl.ask(`选择市场 [1-${rows.length}]: `)).trim());
+  const pick = Number((await rl.ask(`Select market [1-${rows.length}]: `)).trim());
   if (!Number.isInteger(pick) || pick < 1 || pick > rows.length) fail("invalid market selection");
   return rows[pick - 1];
 }
@@ -530,10 +530,10 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
 /** Ask for a book source, set ctx.values accordingly, and load + reconcile the live book. */
 async function loadBookInteractive(ctx: Ctx, rl: Asker, params: MarketParams): Promise<BookEntry[]> {
   const canRelayer = Boolean(ctx.profile.relayerUrl) && ctx.profile.abiProfile === "core-v2";
-  let source = canRelayer ? (await rl.ask("订单来源 relayer/files [relayer]: ")).trim().toLowerCase() || "relayer" : "files";
+  let source = canRelayer ? (await rl.ask("Order source relayer/files [relayer]: ")).trim().toLowerCase() || "relayer" : "files";
   if (source !== "relayer" && source !== "files") fail("source must be relayer or files");
   if (source === "files") {
-    const dir = (await rl.ask("签名单 JSON 文件目录: ")).trim();
+    const dir = (await rl.ask("Signed-offer JSON directory: ")).trim();
     if (!dir) fail("a directory is required for the files source");
     ctx.values.dir = dir;
   }
@@ -546,17 +546,17 @@ async function loadBookInteractive(ctx: Ctx, rl: Asker, params: MarketParams): P
 async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
   const c = client(ctx, false);
   const chosen = await pickMarketInteractive(ctx, c, rl);
-  const sideAnswer = (await rl.ask("方向 buy=出借挂买单 / sell=卖出持有的 DCN [buy]: ")).trim().toLowerCase() || "buy";
+  const sideAnswer = (await rl.ask("Side buy=lend (resting bid) / sell=sell held DCN [buy]: ")).trim().toLowerCase() || "buy";
   if (sideAnswer !== "buy" && sideAnswer !== "sell") fail("side must be buy or sell");
   if (chosen.itm && sideAnswer === "buy") {
-    const go = (await rl.ask("⚠ 该市场 floor 高于现货——近平价出借是确定性亏损（借款人理性选择违约）。确定继续？输入 yes-itm 确认: ")).trim();
+    const go = (await rl.ask("⚠ This market's floor is ABOVE spot — lending near par is a guaranteed loss (defaulting is the borrower's rational move). Type yes-itm to continue: ")).trim();
     if (go !== "yes-itm") fail("aborted at the ITM confirmation");
     ctx.values["acknowledge-itm"] = true;
   }
-  const amount = (await rl.ask(`面值金额（${chosen.loanSym}，如 200）: `)).trim();
+  const amount = (await rl.ask(`Face amount (${chosen.loanSym}, e.g. 200): `)).trim();
   const faceUnits = parseAmount(amount, chosen.loanDec);
   if (faceUnits <= 0n) fail("amount must be positive");
-  const priceAnswer = (await rl.ask("价格：年化 %（如 10 或 8.5），或 tick:<n> 直接指定网格: ")).trim();
+  const priceAnswer = (await rl.ask("Price: APR % (e.g. 10 or 8.5), or tick:<n> for direct grid placement: ")).trim();
   let tick: bigint;
   if (/^tick:\d+$/.test(priceAnswer)) {
     tick = BigInt(priceAnswer.slice(5));
@@ -576,18 +576,18 @@ async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
     const liquidity = await c.liquidityOf(marketId, signer.address as Address);
     if (liquidity < principalNeeded) {
       const shortfall = principalNeeded - liquidity;
-      console.log(`当前市场内流动性 ${formatAmount(liquidity, chosen.loanDec)}，吃满此单需要 ${formatAmount(principalNeeded, chosen.loanDec)}。`);
+      console.log(`Market escrow is ${formatAmount(liquidity, chosen.loanDec)}; filling this bid fully needs ${formatAmount(principalNeeded, chosen.loanDec)}.`);
       const balance = await c.balanceOf(chosen.market.params.loanToken, signer.address as Address);
       if (balance < shortfall) {
         const info = Object.values(ctx.profile.tokens ?? {}).find((t) => t.address === chosen.market.params.loanToken);
         if (info?.mintable) {
-          const mint = (await rl.ask(`钱包余额不足，mint ${formatAmount(shortfall - balance, chosen.loanDec)} ${chosen.loanSym} 测试币？[y/N]: `)).trim().toLowerCase();
+          const mint = (await rl.ask(`Wallet balance short — mint ${formatAmount(shortfall - balance, chosen.loanDec)} test ${chosen.loanSym}? [y/N]: `)).trim().toLowerCase();
           if (mint === "y") await sc.mint(chosen.market.params.loanToken, signer.address as Address, shortfall - balance);
         } else {
-          console.log("警告：钱包余额不足且该代币不可 mint——挂出的单在补足 escrow 前无法被吃。");
+          console.log("Warning: wallet balance is short and this token is not mintable — the bid cannot fill until escrow is topped up.");
         }
       }
-      const fund = (await rl.ask(`存入差额 ${formatAmount(shortfall, chosen.loanDec)} ${chosen.loanSym} 到市场 escrow？[y/N]: `)).trim().toLowerCase();
+      const fund = (await rl.ask(`Deposit the ${formatAmount(shortfall, chosen.loanDec)} ${chosen.loanSym} shortfall into market escrow? [y/N]: `)).trim().toLowerCase();
       if (fund === "y") {
         const tx = await sc.fund(chosen.market.params, shortfall);
         console.log(`funded: ${tx.hash}`);
@@ -595,24 +595,24 @@ async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
     }
   } else {
     const credit = await c.creditOf(c.marketId(chosen.market.params), signer.address as Address);
-    if (credit < faceUnits) console.log(`警告：你持有的 DCN（${formatAmount(credit, chosen.loanDec)}）少于卖单面值——超出部分成交会失败。`);
+    if (credit < faceUnits) console.log(`Warning: you hold less DCN (${formatAmount(credit, chosen.loanDec)}) than the ask size — fills beyond it will revert.`);
   }
   const registered = await c.pub.readContract({ address: ctx.profile.core, abi: c.adapter.coreAbi, functionName: "isRatifier", args: [signer.address, ctx.profile.signatureRatifier] } as never);
   if (registered !== true) {
-    const reg = (await rl.ask("尚未注册报价 ratifier（每账户一次）。现在注册？[y/N]: ")).trim().toLowerCase();
+    const reg = (await rl.ask("Quote ratifier not registered yet (once per account). Register now? [y/N]: ")).trim().toLowerCase();
     if (reg === "y") {
       const tx = await sc.setRatifier(ctx.profile.signatureRatifier, true);
       console.log(`setRatifier: ${tx.hash}`);
     } else {
-      console.log("警告：不注册 ratifier 的话签出的单无法成交。");
+      console.log("Warning: without a registered ratifier the signed offer cannot fill.");
     }
   }
   let publish = false;
   if (ctx.profile.relayerUrl && ctx.profile.abiProfile === "core-v2") {
-    publish = (await rl.ask("发布到 relayer 让 web 用户可见并可成交？[y/N]: ")).trim().toLowerCase() === "y";
+    publish = (await rl.ask("Publish to the relayer so web users can see and fill it? [y/N]: ")).trim().toLowerCase() === "y";
   }
-  const out = (await rl.ask("保存签名单到文件 [offer-<commitment>.json]: ")).trim();
-  const confirm = (await rl.ask(`确认：${sideAnswer === "buy" ? "买单(出借)" : "卖单(出售 DCN)"} ${amount} ${chosen.loanSym} 面值 @ ${priceAnswer}${publish ? "，发布 relayer" : ""} —— 签名挂单？[y/N]: `)).trim().toLowerCase();
+  const out = (await rl.ask("Save signed offer to file [offer-<commitment>.json]: ")).trim();
+  const confirm = (await rl.ask(`Confirm: ${sideAnswer === "buy" ? "BID (lend)" : "ASK (sell DCN)"} ${amount} ${chosen.loanSym} face @ ${priceAnswer}${publish ? ", publish to relayer" : ""} — sign and rest? [y/N]: `)).trim().toLowerCase();
   if (confirm !== "y") fail("aborted before signing");
   ctx.values.side = sideAnswer;
   ctx.values["max-units"] = amount;
@@ -624,41 +624,41 @@ async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
 async function wizardBorrow(ctx: Ctx, rl: Asker): Promise<void> {
   const c = client(ctx, false);
   const chosen = await pickMarketInteractive(ctx, c, rl);
-  if (chosen.itm) console.log("提示：该市场 floor 高于现货——对借款人反而有利（借入额高于抵押品市值），到期违约即为理性选择。");
+  if (chosen.itm) console.log("Note: this market's floor is above spot — favorable to borrowers (principal exceeds collateral value); defaulting at maturity is rational.");
   const live = await loadBookInteractive(ctx, rl, chosen.market.params);
   const bids = sortSide(live, "bid");
   if (bids.length === 0) fail("no executable bids on this market — nothing to borrow against");
-  console.log("可吃的买单（借款额度）：");
+  console.log("Executable bids (borrowing capacity):");
   bids.slice(0, 5).forEach((b, i) => {
-    console.log(`  [${i + 1}] 剩余面值 ${formatAmount(b.size, chosen.loanDec)} ${chosen.loanSym} @ 价格 ${formatAmount(b.price, 18)} (tick ${b.offer.tick})`);
+    console.log(`  [${i + 1}] remaining ${formatAmount(b.size, chosen.loanDec)} ${chosen.loanSym} face @ price ${formatAmount(b.price, 18)} (tick ${b.offer.tick})`);
   });
-  const pick = Number((await rl.ask(`选择挂单 [1-${Math.min(5, bids.length)}]: `)).trim());
+  const pick = Number((await rl.ask(`Select offer [1-${Math.min(5, bids.length)}]: `)).trim());
   if (!Number.isInteger(pick) || pick < 1 || pick > Math.min(5, bids.length)) fail("invalid offer selection");
   const bid = bids[pick - 1];
-  const amount = (await rl.ask(`借款面值（≤ ${formatAmount(bid.size, chosen.loanDec)} ${chosen.loanSym}）: `)).trim();
+  const amount = (await rl.ask(`Borrow face (≤ ${formatAmount(bid.size, chosen.loanDec)} ${chosen.loanSym}): `)).trim();
   const units = parseAmount(amount, chosen.loanDec);
   if (units <= 0n || units > bid.size) fail("units out of range for the selected offer");
   const signer = accountFor(ctx);
   const sc = new BiviumClient(ctx.profile, signer);
   const quote = await sc.quoteFill(bid.offer, units);
-  console.log(`报价：到手本金 ${formatAmount(quote.principal, chosen.loanDec)} ${chosen.loanSym} | 锁定抵押 ${formatAmount(quote.collateral, chosen.collDec)} ${chosen.collSym} | 隐含年化 ${Number(quote.aprBps) / 100}%`);
-  console.log(`到期须还精确面值 ${amount} ${chosen.loanSym}（利息 = ${formatAmount(units - quote.principal, chosen.loanDec)}），逾期抵押品进入结算池。`);
+  console.log(`Quote: principal received ${formatAmount(quote.principal, chosen.loanDec)} ${chosen.loanSym} | collateral locked ${formatAmount(quote.collateral, chosen.collDec)} ${chosen.collSym} | implied APR ${Number(quote.aprBps) / 100}%`);
+  console.log(`Repay exactly ${amount} ${chosen.loanSym} face before maturity (interest = ${formatAmount(units - quote.principal, chosen.loanDec)}); after maturity the collateral goes to settlement.`);
   const collBalance = await c.balanceOf(bid.offer.collateralToken, signer.address as Address);
   if (collBalance < quote.collateral) {
     const info = Object.values(ctx.profile.tokens ?? {}).find((t) => t.address === bid.offer.collateralToken);
     if (info?.mintable) {
-      const mint = (await rl.ask(`抵押品不足，mint ${formatAmount(quote.collateral - collBalance, chosen.collDec)} ${chosen.collSym} 测试币？[y/N]: `)).trim().toLowerCase();
+      const mint = (await rl.ask(`Collateral short — mint ${formatAmount(quote.collateral - collBalance, chosen.collDec)} test ${chosen.collSym}? [y/N]: `)).trim().toLowerCase();
       if (mint === "y") await sc.mint(bid.offer.collateralToken, signer.address as Address, quote.collateral - collBalance);
       else fail("insufficient collateral");
     } else fail(`insufficient collateral: have ${formatAmount(collBalance, chosen.collDec)}, need ${formatAmount(quote.collateral, chosen.collDec)}`);
   }
-  const confirm = (await rl.ask("确认借款并锁定抵押？[y/N]: ")).trim().toLowerCase();
+  const confirm = (await rl.ask("Confirm borrow and lock collateral? [y/N]: ")).trim().toLowerCase();
   if (confirm !== "y") fail("aborted before borrowing");
   const result = await sc.fillAsBorrower(bid.offer, bid.signature, units);
   const date = new Date(Number(bid.offer.maturity) * 1000).toISOString();
-  console.log(`借款成功：收到 ${formatAmount(result.principal, chosen.loanDec)} ${chosen.loanSym} — tx ${result.hash}`);
-  console.log(`还款截止（严格早于）: ${date}`);
-  console.log(`还款命令: bivium repay --loan ${chosen.loanSym} --collateral ${chosen.collSym} --maturity ${bid.offer.maturity} --strike ${bid.offer.strike} --assets ${amount}  然后 bivium reclaim …`);
+  console.log(`Borrowed: received ${formatAmount(result.principal, chosen.loanDec)} ${chosen.loanSym} — tx ${result.hash}`);
+  console.log(`Repay deadline (strictly before): ${date}`);
+  console.log(`Repay command: bivium repay --loan ${chosen.loanSym} --collateral ${chosen.collSym} --maturity ${bid.offer.maturity} --strike ${bid.offer.strike} --assets ${amount}  then bivium reclaim …`);
 }
 
 async function wizardTrade(ctx: Ctx, rl: Asker): Promise<void> {
@@ -667,33 +667,33 @@ async function wizardTrade(ctx: Ctx, rl: Asker): Promise<void> {
   const live = await loadBookInteractive(ctx, rl, chosen.market.params);
   const asks = aggregateLevels(sortSide(live, "ask")).slice(0, 5);
   const bids = aggregateLevels(sortSide(live, "bid")).slice(0, 5);
-  console.log("订单簿：");
+  console.log("Order book:");
   asks.forEach((l) => console.log(`  ASK  ${formatAmount(l.size, chosen.loanDec)} @ ${formatAmount(l.price, 18)} (tick ${l.tick})`));
   bids.forEach((l) => console.log(`  BID  ${formatAmount(l.size, chosen.loanDec)} @ ${formatAmount(l.price, 18)} (tick ${l.tick})`));
-  const dir = (await rl.ask("方向 buy=买入 DCN / sell=卖出持有的 DCN: ")).trim().toLowerCase();
+  const dir = (await rl.ask("Direction buy=buy DCN / sell=sell held DCN: ")).trim().toLowerCase();
   if (dir !== "buy" && dir !== "sell") fail("direction must be buy or sell");
   const request: { units?: bigint; spend?: bigint; limitTick?: bigint } = {};
   if (dir === "buy") {
-    const mode = (await rl.ask("按面值 units 还是按花费 spend？[units/spend]: ")).trim().toLowerCase();
-    const value = (await rl.ask(`金额（${chosen.loanSym}）: `)).trim();
+    const mode = (await rl.ask("By face units or exact spend? [units/spend]: ")).trim().toLowerCase();
+    const value = (await rl.ask(`Amount (${chosen.loanSym}): `)).trim();
     if (mode === "spend") request.spend = parseAmount(value, chosen.loanDec);
     else request.units = parseAmount(value, chosen.loanDec);
   } else {
-    request.units = parseAmount((await rl.ask(`卖出面值（${chosen.loanSym}）: `)).trim(), chosen.loanDec);
+    request.units = parseAmount((await rl.ask(`Sell face (${chosen.loanSym}): `)).trim(), chosen.loanDec);
   }
-  const limit = (await rl.ask("滑点边界 tick（可空）: ")).trim();
+  const limit = (await rl.ask("Slippage bound tick (optional): ")).trim();
   if (limit) request.limitTick = BigInt(limit);
   const signer = accountFor(ctx);
   const tc = new TradeClient(ctx.profile, signer);
   const plan = dir === "buy" ? await tc.planBuy(live, request) : await tc.planSell(live, request);
   if (plan.takes.length === 0) fail("nothing executable within the given bounds");
-  console.log("成交计划：");
-  plan.takes.forEach((t) => console.log(`  吃 ${formatAmount(t.units, chosen.loanDec)} @ tick ${t.entry.offer.tick}`));
-  console.log(`  合计 ${formatAmount(plan.totalUnits, chosen.loanDec)} 面值，${dir === "buy" ? "花费" : "进账"} ${formatAmount(plan.totalCost, chosen.loanDec)} ${chosen.loanSym}，worst tick ${plan.worstTick}`);
-  const confirm = (await rl.ask("确认按此计划执行？[y/N]: ")).trim().toLowerCase();
+  console.log("Sweep plan:");
+  plan.takes.forEach((t) => console.log(`  take ${formatAmount(t.units, chosen.loanDec)} @ tick ${t.entry.offer.tick}`));
+  console.log(`  total ${formatAmount(plan.totalUnits, chosen.loanDec)} face, ${dir === "buy" ? "cost" : "proceeds"} ${formatAmount(plan.totalCost, chosen.loanDec)} ${chosen.loanSym}, worst tick ${plan.worstTick}`);
+  const confirm = (await rl.ask("Execute this plan? [y/N]: ")).trim().toLowerCase();
   if (confirm !== "y") fail("aborted before execution");
   const result = await tc.executePlan(plan);
-  console.log(`完成：credit ${result.creditDelta >= 0n ? "+" : ""}${formatAmount(result.creditDelta, chosen.loanDec)}，现金 ${result.loanDelta >= 0n ? "+" : ""}${formatAmount(result.loanDelta, chosen.loanDec)} — tx ${result.hash}`);
+  console.log(`Done: credit ${result.creditDelta >= 0n ? "+" : ""}${formatAmount(result.creditDelta, chosen.loanDec)}, cash ${result.loanDelta >= 0n ? "+" : ""}${formatAmount(result.loanDelta, chosen.loanDec)} — tx ${result.hash}`);
 }
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -869,25 +869,25 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       const matured = m.params.maturity <= now;
       rows.push({ marketId: id, pair, matured, position, credit, liquidity, orders });
       lines.push(`\n${pair}  maturity ${m.params.maturity}${matured ? "  [MATURED]" : ""}  ${id}`);
-      if (position.debt > 0n) lines.push(`  借款: 债务 ${formatAmount(position.debt, loanDec)}, 锁仓 ${formatAmount(position.collateral, collDec)}${matured ? " — 还款窗口已关闭，抵押品进入结算" : " — 到期前须精确还款"}`);
-      if (position.collateralWithdrawable > 0n) lines.push(`  可取回抵押品: ${formatAmount(position.collateralWithdrawable, collDec)}（跑 reclaim）`);
-      if (credit > 0n) lines.push(`  DCN 持仓: ${formatAmount(credit, loanDec)}${matured ? "（已到期，可 claim 结算篮子）" : ""}`);
-      if (liquidity > 0n) lines.push(`  escrow 流动性: ${formatAmount(liquidity, loanDec)}`);
-      for (const o of orders) lines.push(`  挂单[${o.side}] 剩余 ${formatAmount(o.remaining, loanDec)} @ tick ${o.tick}  ${o.commitment.slice(0, 10)}…`);
+      if (position.debt > 0n) lines.push(`  Loan: debt ${formatAmount(position.debt, loanDec)}, locked ${formatAmount(position.collateral, collDec)}${matured ? " — repayment window closed; collateral goes to settlement" : " — repay the exact face before maturity"}`);
+      if (position.collateralWithdrawable > 0n) lines.push(`  Reclaimable collateral: ${formatAmount(position.collateralWithdrawable, collDec)} (run reclaim)`);
+      if (credit > 0n) lines.push(`  DCN holdings: ${formatAmount(credit, loanDec)}${matured ? " (matured — claim the settlement basket)" : ""}`);
+      if (liquidity > 0n) lines.push(`  Escrowed liquidity: ${formatAmount(liquidity, loanDec)}`);
+      for (const o of orders) lines.push(`  Order[${o.side}] remaining ${formatAmount(o.remaining, loanDec)} @ tick ${o.tick}  ${o.commitment.slice(0, 10)}…`);
     }
-    if (rows.length === 0) lines.push("  （所有已发现市场上均无头寸、持仓或挂单）");
-    if (!wantOrders) lines.push("\n(挂单需要 relayer 或 --dir 订单目录才可见；链上头寸不受影响)");
+    if (rows.length === 0) lines.push("  (no positions, holdings, or resting orders on any discovered market)");
+    if (!wantOrders) lines.push("\n(resting orders need a relayer or --dir order directory to be visible; on-chain positions are unaffected)");
     output(ctx.json, { account, markets: rows }, lines.join("\n"));
   },
 
   "wizard": async (ctx) => {
     const rl = makeAsker();
     try {
-      console.log("bivium 向导 — 你想做什么？");
-      console.log("  [1] 出借 / 挂单（存入流动性并签名报价单）");
-      console.log("  [2] 抵押借款（从订单簿吃单借出贷款代币）");
-      console.log("  [3] 交易 DCN（市价买入/卖出已有信用）");
-      const intent = (await rl.ask("选择 [1-3]: ")).trim();
+      console.log("bivium wizard — what would you like to do?");
+      console.log("  [1] Lend / quote (deposit liquidity and sign a resting offer)");
+      console.log("  [2] Borrow (take a resting bid against collateral)");
+      console.log("  [3] Trade DCN (market buy/sell existing credit)");
+      const intent = (await rl.ask("Choose [1-3]: ")).trim();
       if (intent === "1") await wizardLend(ctx, rl);
       else if (intent === "2") await wizardBorrow(ctx, rl);
       else if (intent === "3") await wizardTrade(ctx, rl);
