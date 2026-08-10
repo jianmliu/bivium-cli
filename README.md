@@ -40,6 +40,24 @@ npm run cli -- market state --offer bid.json
 npm run cli -- read position --offer bid.json --account 0x...
 ```
 
+## Choosing a runtime — `./bivium-run`
+
+One launcher, three modes:
+
+```bash
+./bivium-run --runtime local  market list     # run node directly on this machine
+./bivium-run --runtime docker market list     # run inside the persistent sandbox container
+./bivium-run market list                      # auto: docker when a daemon is reachable, else local
+./bivium-run --runtime docker shell           # interactive bash inside the sandbox
+```
+
+Docker mode provisions everything on first use (builds the image, creates the persistent
+`bivium-agent` container) and reuses it afterwards, so in-container keys and open positions
+survive between invocations. `BIVIUM_PK`/`BIVIUM_PROFILE` are forwarded in; an absolute host
+profile path is copied into the container. In docker mode `--key-file` paths refer to the
+container filesystem by design — generate keys inside the sandbox rather than copying host keys
+in. `BIVIUM_RUNTIME=local|docker|auto` sets the default.
+
 ## Sandboxed agents (Docker)
 
 Agents should not need the host machine. The image is self-contained — keys are generated inside

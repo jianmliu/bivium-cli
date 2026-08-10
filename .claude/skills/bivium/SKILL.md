@@ -18,7 +18,12 @@ plus the safety rules an agent must follow. Everything is testnet-only with valu
 
 ## Setup (once per session)
 
-Prefer a sandbox when one is available — the CLI needs no host access at all for the fresh-wallet
+Use `./bivium-run` as the entry point — it picks the runtime for you (`--runtime local|docker`,
+default auto: docker when a daemon is reachable). Docker mode auto-provisions and reuses a
+persistent sandbox container, so keys and open positions survive across invocations; in that mode
+`--key-file` paths are container paths — generate keys inside, never copy host keys in.
+
+Prefer the sandbox when one is available — the CLI needs no host access at all for the fresh-wallet
 flow: `docker build -t bivium-cli . && docker run --rm -it --entrypoint bash bivium-cli` gives a
 disposable environment where keys are generated inside and die with the container (network egress
 to the RPC + relayer origin is the only requirement). BUT: a borrow position is bound to its

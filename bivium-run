@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# bivium-run — choose the execution runtime for the bivium CLI.
+#
+#   ./bivium-run [--runtime local|docker|auto] <bivium args…>
+#   ./bivium-run --runtime docker shell          # interactive bash inside the sandbox
+#
+# local  : run node directly on this machine (fastest; keys live on the host filesystem).
+# docker : run inside a persistent sandbox container `bivium-agent` (created on first use,
+#          survives stop/start so in-container keys and open positions are not orphaned;
+#          remove with `docker rm -f bivium-agent` to end its life explicitly).
+# auto   : docker when a daemon is reachable, local otherwise. Env BIVIUM_RUNTIME overrides.
+#
+# Env passthrough: BIVIUM_PK and BIVIUM_PROFILE are forwarded into the container. An absolute
+# host BIVIUM_PROFILE path is copied in; the baked-in profiles under /app/profiles work as-is.
+# NOTE: in docker mode, --key-file paths refer to the CONTAINER filesystem by design — generate
+# keys inside the sandbox (wallet create) instead of copying host keys in.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+RUNTIME="${BIVIUM_RUNTIME:-auto}"
+if [ "${1:-}" = "--runtime" ]; then
+  RUNTIME="${2:?--runtime needs a value}"
+  shift 2
+fi
+
+if [ "$RUNTIME" = "auto" ]; then
+  if docker info >/dev/null 2>&1; then RUNTIME=docker; else RUNTIME=local; fi
+  echo "runtime: $RUNTIME (auto)" >&2
+fi
+
+case "$RUNTIME" in
+  local)
+    exec node bin/bivium.mjs "$@"
+    ;;
+  docker)
+    docker info >/dev/null 2>&1 || { echo "error: docker daemon not reachable" >&2; exit 1; }
+    if ! docker image inspect bivium-cli >/dev/null 2>&1; then
+      echo "building sandbox image…" >&2
+      docker build -q -t bivium-cli . >&2
+    fi
+    if ! docker container inspect bivium-agent >/dev/null 2>&1; then
+      docker run -d --name bivium-agent --entrypoint sleep bivium-cli infinity >/dev/null
+      echo "created persistent sandbox container bivium-agent" >&2
+    elif [ "$(docker container inspect -f '{{.State.Running}}' bivium-agent)" != "true" ]; then
+      docker start bivium-agent >/dev/null
+    fi
+    ENVS=()
+    [ -n "${BIVIUM_PK:-}" ] && ENVS+=(-e "BIVIUM_PK=$BIVIUM_PK")
+    if [ -n "${BIVIUM_PROFILE:-}" ]; then
+      case "$BIVIUM_PROFILE" in
+        /*)
+          if [ -f "$BIVIUM_PROFILE" ]; then
+            docker cp "$BIVIUM_PROFILE" bivium-agent:/tmp/host-profile.json >/dev/null
+            ENVS+=(-e "BIVIUM_PROFILE=/tmp/host-profile.json")
+          else
+            ENVS+=(-e "BIVIUM_PROFILE=$BIVIUM_PROFILE")
+          fi
+          ;;
+        *) ENVS+=(-e "BIVIUM_PROFILE=$BIVIUM_PROFILE") ;;
+      esac
+    fi
+    TTY=()
+    [ -t 0 ] && [ -t 1 ] && TTY=(-it)
+    if [ "${1:-}" = "shell" ]; then
+      exec docker exec ${TTY[@]+"${TTY[@]}"} ${ENVS[@]+"${ENVS[@]}"} bivium-agent bash
+    fi
+    exec docker exec ${TTY[@]+"${TTY[@]}"} -i ${ENVS[@]+"${ENVS[@]}"} bivium-agent node /app/bin/bivium.mjs "$@"
+    ;;
+  *)
+    echo "error: unknown runtime '$RUNTIME' (local|docker|auto)" >&2
+    exit 1
+    ;;
+esac
