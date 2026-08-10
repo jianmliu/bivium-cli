@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -66,6 +67,7 @@ usage: bivium <command> [options]
   maker set-ratifier [--off]
   maker fund --assets <human>
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
+  maker wizard                        # 交互式挂单：选市场 → 输金额 → 输价格 → 确认签名
   maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human>
                    [--ttl <s>] [--out <file>] [--publish] [--acknowledge-itm]
   offer status --offer <file>
@@ -353,6 +355,116 @@ function planJson(plan: TradePlan): Record<string, unknown> {
   };
 }
 
+// Line-buffered prompt helper: works on a TTY and with piped stdin (readline drops buffered
+// lines on EOF-close, which silently kills a naive question() loop under pipes).
+function makeAsker() {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY === true });
+  const queue: string[] = [];
+  const waiters: Array<(line: string) => void> = [];
+  let closed = false;
+  rl.on("line", (line) => {
+    const waiter = waiters.shift();
+    if (waiter) waiter(line);
+    else queue.push(line);
+  });
+  rl.on("close", () => {
+    closed = true;
+    while (waiters.length) waiters.shift()!("");
+  });
+  return {
+    async ask(prompt: string): Promise<string> {
+      process.stdout.write(prompt);
+      const line = queue.length ? queue.shift()! : closed ? "" : await new Promise<string>((resolve) => waiters.push(resolve));
+      if (process.stdin.isTTY !== true) process.stdout.write(line + "\n"); // echo piped answers for a readable transcript
+      return line;
+    },
+    close: () => rl.close(),
+  };
+}
+
+async function runMakeOffer(ctx: Ctx, market: { params: MarketParams; loanDecimals: number; collateralDecimals: number }): Promise<void> {
+const { params, loanDecimals, collateralDecimals } = market;
+  const side = need(ctx.values.side as string | undefined, "side");
+  if (side !== "buy" && side !== "sell") fail("--side must be buy or sell");
+  if (side === "buy") {
+    // Economic guardrail (display-only spot, never part of the offer): a buy bid on a market
+    // whose floor sits at/above spot buys collateral above market — the borrower's rational
+    // strategy is to default, so a near-par lend price is a guaranteed loss.
+    const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === params.collateralToken);
+    const asset = spotAssetFor(collInfo?.[0]);
+    if (asset) {
+      const spot = await fetchSpotUsd(asset);
+      let floorHuman: string | null = null;
+      try { floorHuman = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { floorHuman = null; }
+      const money = spot !== null && floorHuman !== null ? assessMoneyness(floorHuman, spot) : null;
+      if (money?.itm && ctx.values["acknowledge-itm"] !== true) {
+        fail(`this market's floor (${floorHuman}) is ${((money.ratio - 1) * 100).toFixed(1)}% ABOVE ${asset} spot (${spot}) — your bid would buy collateral above market and the borrower's rational strategy is to default. Pass --acknowledge-itm to quote anyway.`);
+      }
+      if (money === null) console.error("note: spot unavailable — cannot assess floor moneyness for this bid");
+    }
+  }
+  const maxUnits = parseAmount(need(ctx.values["max-units"] as string | undefined, "max-units"), loanDecimals);
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  let tick: bigint;
+  if (typeof ctx.values.tick === "string") {
+    tick = BigInt(ctx.values.tick);
+    if (tick % 4n !== 0n || tick < 0n || tick > 5820n) fail("--tick must be a grid tick (multiple of 4, 0..5820)");
+  } else {
+    const aprBps = BigInt(need(ctx.values["apr-bps"] as string | undefined, "apr-bps"));
+    const term = params.maturity - now;
+    if (term <= 0n) fail("market is already matured");
+    const price = priceFromSimpleAprBps(aprBps, term);
+    // buy bid rounds down (maker pays less), sell ask rounds up (maker asks more).
+    tick = priceToTick(price, side === "sell");
+  }
+  const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
+  const account = accountFor(ctx);
+  const offer: Offer = {
+    ...params,
+    maker: account.address as Address,
+    buy: side === "buy",
+    tick,
+    maxUnits,
+    maxAssets: 0n,
+    start: now - 300n,
+    expiry: now + ttl,
+    group: `0x${randomBytes(32).toString("hex")}` as Hex,
+    ratifier: ctx.profile.signatureRatifier,
+  };
+  const commitment = adapterFor(ctx.profile.abiProfile).offerCommitment(
+    { chainId: ctx.profile.chainId, core: ctx.profile.core },
+    offer,
+  );
+  const digest = ratifyDigest(ctx.profile.chainId, ctx.profile.signatureRatifier, commitment);
+  const signature = await account.sign({ hash: digest });
+  // Precheck: refuse to emit a file the on-chain ratifier would not accept.
+  const c = new BiviumClient(ctx.profile, account);
+  await c.verifyProfile();
+  const status = await c.offerStatus(offer, signature);
+  if (!status.ratified) fail("on-chain ratifier precheck did not return RATIFIED — aborting");
+  const file = buildSignedOfferFile(ctx.profile, offer, commitment, signature);
+  const path = typeof ctx.values.out === "string" ? ctx.values.out : `offer-${commitment.slice(2, 10)}.json`;
+  writeFileSync(path, JSON.stringify(file, null, 2) + "\n");
+  let published = false;
+  if (ctx.values.publish === true) {
+    // publishSignedOffer/relayerDomain reject core-v1 (wire protocol is 17-field domain-bound)
+    // and a missing relayerUrl with clear errors before anything is sent.
+    await publishSignedOffer(relayerDomain(ctx.profile), offer, signature);
+    published = true;
+  }
+  output(
+    ctx.json,
+    { path, commitment, tick, price: tickToPrice(tick), ratifierRegistered: status.ratifierRegistered, published },
+    [
+      `offer written to ${path}`,
+      `  commitment: ${commitment}`,
+      `  tick ${tick} → price ${formatAmount(tickToPrice(tick), 18)}`,
+      status.ratifierRegistered ? `  ratifier registered ✓` : `  WARNING: maker has not run \`maker set-ratifier\` yet`,
+      ...(published ? [`  published to relayer ${ctx.profile.relayerUrl}`] : []),
+    ].join("\n"),
+  );
+}
+
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   "market list": async (ctx) => {
     const c = client(ctx, false);
@@ -478,87 +590,88 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { ...tx }, `withdrew ${formatAmount(assets, loanDecimals)} to ${receiver}: ${tx.hash}`);
   },
 
-  "maker make-offer": async (ctx) => {
-    const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
-    const side = need(ctx.values.side as string | undefined, "side");
-    if (side !== "buy" && side !== "sell") fail("--side must be buy or sell");
-    if (side === "buy") {
-      // Economic guardrail (display-only spot, never part of the offer): a buy bid on a market
-      // whose floor sits at/above spot buys collateral above market — the borrower's rational
-      // strategy is to default, so a near-par lend price is a guaranteed loss.
-      const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === params.collateralToken);
-      const asset = spotAssetFor(collInfo?.[0]);
-      if (asset) {
-        const spot = await fetchSpotUsd(asset);
-        let floorHuman: string | null = null;
-        try { floorHuman = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { floorHuman = null; }
-        const money = spot !== null && floorHuman !== null ? assessMoneyness(floorHuman, spot) : null;
-        if (money?.itm && ctx.values["acknowledge-itm"] !== true) {
-          fail(`this market's floor (${floorHuman}) is ${((money.ratio - 1) * 100).toFixed(1)}% ABOVE ${asset} spot (${spot}) — your bid would buy collateral above market and the borrower's rational strategy is to default. Pass --acknowledge-itm to quote anyway.`);
-        }
-        if (money === null) console.error("note: spot unavailable — cannot assess floor moneyness for this bid");
-      }
-    }
-    const maxUnits = parseAmount(need(ctx.values["max-units"] as string | undefined, "max-units"), loanDecimals);
+
+  "maker wizard": async (ctx) => {
+    // Interactive order placement for humans: pick a discovered market, then amount and price.
+    // Agents should use the flag form (make-offer) — every answer here maps to a flag.
+    const c = client(ctx, false);
+    const fromBlock = BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock"));
+    console.log("正在扫描链上已有市场（join，不要新建，避免流动性分散）…");
+    const markets = await discoverMarketsOnChain(c, { fromBlock });
+    if (markets.length === 0) fail("no touched markets found — nothing to quote into");
+    const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
     const now = BigInt(Math.floor(Date.now() / 1000));
-    let tick: bigint;
-    if (typeof ctx.values.tick === "string") {
-      tick = BigInt(ctx.values.tick);
-      if (tick % 4n !== 0n || tick < 0n || tick > 5820n) fail("--tick must be a grid tick (multiple of 4, 0..5820)");
-    } else {
-      const aprBps = BigInt(need(ctx.values["apr-bps"] as string | undefined, "apr-bps"));
-      const term = params.maturity - now;
-      if (term <= 0n) fail("market is already matured");
-      const price = priceFromSimpleAprBps(aprBps, term);
-      // buy bid rounds down (maker pays less), sell ask rounds up (maker asks more).
-      tick = priceToTick(price, side === "sell");
+    const active = markets.filter((m) => m.params.maturity > now);
+    if (active.length === 0) fail("all touched markets are already matured");
+    const spots = new Map<string, number | null>();
+    const rows: Array<{ market: (typeof active)[number]; label: string; itm: boolean; loanDec: number; collDec: number }> = [];
+    for (const m of active) {
+      const loan = bySymbol.get(m.params.loanToken.toLowerCase());
+      const coll = bySymbol.get(m.params.collateralToken.toLowerCase());
+      const loanDec = loan?.dec ?? (await c.tokenDecimals(m.params.loanToken));
+      const collDec = coll?.dec ?? (await c.tokenDecimals(m.params.collateralToken));
+      let floor = "?";
+      try { floor = floorFromStrike(m.params.strike, loanDec, collDec); } catch { /* off-grid */ }
+      const asset = spotAssetFor(coll?.sym);
+      if (asset && !spots.has(asset)) spots.set(asset, await fetchSpotUsd(asset));
+      const spot = asset ? spots.get(asset) ?? null : null;
+      const money = spot !== null && floor !== "?" ? assessMoneyness(floor, spot) : null;
+      const state = await c.marketState(m.id);
+      const date = new Date(Number(m.params.maturity) * 1000).toISOString().slice(0, 10);
+      const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
+      const flags = [
+        m.params.gate === ZERO_ADDRESS ? "" : "[gated]",
+        money === null ? "" : money.itm ? `[ITM ⚠ floor/spot ${money.ratio.toFixed(2)}]` : `[OTM ${money.ratio.toFixed(2)}]`,
+      ].filter(Boolean).join(" ");
+      rows.push({
+        market: m,
+        label: `${pair}  floor ${floor}  到期 ${date}  在贷 ${formatAmount(state.activeCredit, loanDec)}  已还 ${formatAmount(state.repaidCredit, loanDec)}  ${flags}`,
+        itm: money?.itm === true,
+        loanDec,
+        collDec,
+      });
     }
-    const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
-    const account = accountFor(ctx);
-    const offer: Offer = {
-      ...params,
-      maker: account.address as Address,
-      buy: side === "buy",
-      tick,
-      maxUnits,
-      maxAssets: 0n,
-      start: now - 300n,
-      expiry: now + ttl,
-      group: `0x${randomBytes(32).toString("hex")}` as Hex,
-      ratifier: ctx.profile.signatureRatifier,
-    };
-    const commitment = adapterFor(ctx.profile.abiProfile).offerCommitment(
-      { chainId: ctx.profile.chainId, core: ctx.profile.core },
-      offer,
-    );
-    const digest = ratifyDigest(ctx.profile.chainId, ctx.profile.signatureRatifier, commitment);
-    const signature = await account.sign({ hash: digest });
-    // Precheck: refuse to emit a file the on-chain ratifier would not accept.
-    const c = new BiviumClient(ctx.profile, account);
-    await c.verifyProfile();
-    const status = await c.offerStatus(offer, signature);
-    if (!status.ratified) fail("on-chain ratifier precheck did not return RATIFIED — aborting");
-    const file = buildSignedOfferFile(ctx.profile, offer, commitment, signature);
-    const path = typeof ctx.values.out === "string" ? ctx.values.out : `offer-${commitment.slice(2, 10)}.json`;
-    writeFileSync(path, JSON.stringify(file, null, 2) + "\n");
-    let published = false;
-    if (ctx.values.publish === true) {
-      // publishSignedOffer/relayerDomain reject core-v1 (wire protocol is 17-field domain-bound)
-      // and a missing relayerUrl with clear errors before anything is sent.
-      await publishSignedOffer(relayerDomain(ctx.profile), offer, signature);
-      published = true;
+    rows.forEach((r, i) => console.log(`  [${i + 1}] ${r.label}`));
+    const rl = makeAsker();
+    try {
+      const pick = Number((await rl.ask(`选择市场 [1-${rows.length}]: `)).trim());
+      if (!Number.isInteger(pick) || pick < 1 || pick > rows.length) fail("invalid market selection");
+      const chosen = rows[pick - 1];
+      const sideAnswer = (await rl.ask("方向 buy=出借挂买单 / sell=卖出持有的 DCN [buy]: ")).trim().toLowerCase() || "buy";
+      if (sideAnswer !== "buy" && sideAnswer !== "sell") fail("side must be buy or sell");
+      if (chosen.itm && sideAnswer === "buy") {
+        const go = (await rl.ask("⚠ 该市场 floor 高于现货——近平价出借是确定性亏损（借款人理性选择违约）。确定继续？输入 yes-itm 确认: ")).trim();
+        if (go !== "yes-itm") fail("aborted at the ITM confirmation");
+        ctx.values["acknowledge-itm"] = true;
+      }
+      const amount = (await rl.ask("面值金额（贷款代币单位，如 200）: ")).trim();
+      parseAmount(amount, chosen.loanDec); // validate early, exact-decimal rules apply
+      const priceAnswer = (await rl.ask("价格：年化 %（如 10 或 8.5），或 tick:<n> 直接指定网格: ")).trim();
+      if (/^tick:\d+$/.test(priceAnswer)) {
+        ctx.values.tick = priceAnswer.slice(5);
+      } else {
+        const bps = parseAmount(priceAnswer, 2); // "10" → 1000 bps, exact
+        ctx.values["apr-bps"] = bps.toString();
+      }
+      let publish = false;
+      if (ctx.profile.relayerUrl && ctx.profile.abiProfile === "core-v2") {
+        publish = (await rl.ask("发布到 relayer 让 web 用户可见并可成交？[y/N]: ")).trim().toLowerCase() === "y";
+      }
+      const out = (await rl.ask("保存签名单到文件 [offer-<commitment>.json]: ")).trim();
+      const confirm = (await rl.ask(`确认：${sideAnswer === "buy" ? "买单(出借)" : "卖单(出售 DCN)"} ${amount} 面值 @ ${priceAnswer}${publish ? "，发布 relayer" : ""} —— 签名并${sideAnswer === "buy" ? "挂单" : "挂单"}？[y/N]: `)).trim().toLowerCase();
+      if (confirm !== "y") fail("aborted before signing");
+      ctx.values.side = sideAnswer;
+      ctx.values["max-units"] = amount;
+      if (out) ctx.values.out = out;
+      if (publish) ctx.values.publish = true;
+      await runMakeOffer(ctx, { params: chosen.market.params, loanDecimals: chosen.loanDec, collateralDecimals: chosen.collDec });
+    } finally {
+      rl.close();
     }
-    output(
-      ctx.json,
-      { path, commitment, tick, price: tickToPrice(tick), ratifierRegistered: status.ratifierRegistered, published },
-      [
-        `offer written to ${path}`,
-        `  commitment: ${commitment}`,
-        `  tick ${tick} → price ${formatAmount(tickToPrice(tick), 18)}`,
-        status.ratifierRegistered ? `  ratifier registered ✓` : `  WARNING: maker has not run \`maker set-ratifier\` yet`,
-        ...(published ? [`  published to relayer ${ctx.profile.relayerUrl}`] : []),
-      ].join("\n"),
-    );
+  },
+
+  "maker make-offer": async (ctx) => {
+    await runMakeOffer(ctx, await resolveMarket(ctx));
   },
 
   "book list": async (ctx) => {

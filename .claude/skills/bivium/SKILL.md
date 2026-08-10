@@ -105,6 +105,10 @@ Amounts are exact decimal strings in human units ("600", "0.01") — the CLI con
 token's exact decimals and rejects over-precision rather than rounding. Add `--json` whenever you
 need to parse output. In zsh, expand flag-bundles with `${=VAR}` (unquoted vars do not word-split).
 
+When a HUMAN is driving interactively, offer `maker wizard` instead of raw flags — it lists the
+discovered markets (with moneyness/gated flags), prompts for amount and price, requires an
+explicit `yes-itm` on in-the-money markets, and confirms before signing. Agents keep using flags.
+
 ## Workflow: lend (存款借出)
 
 ```bash
