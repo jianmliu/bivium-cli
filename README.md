@@ -40,6 +40,23 @@ npm run cli -- market state --offer bid.json
 npm run cli -- read position --offer bid.json --account 0x...
 ```
 
+## Sandboxed agents (Docker)
+
+Agents should not need the host machine. The image is self-contained — keys are generated inside
+the container and die with it; the only capability required is network egress to the profile RPC,
+the Pages relayer origin (`/api/gas`, `/api/offers`, `/api/markets`), and (optionally, for
+moneyness warnings) `api.coinbase.com`:
+
+```bash
+docker build -t bivium-cli .
+docker run --rm bivium-cli market list
+docker run --rm -it --entrypoint bash bivium-cli    # full interactive session in the sandbox
+```
+
+Inside the container the zero-trust flow works end to end with no mounts and no host secrets:
+`wallet create` → `wallet gas --to <addr> --via-api` → `mock mint` → trade. Mount a volume only
+if you explicitly want a key to outlive the container.
+
 ## Throwaway wallets and gas
 
 Agents should not import long-lived keys. Generate a wallet and fund it from the on-chain Sepolia

@@ -18,8 +18,13 @@ plus the safety rules an agent must follow. Everything is testnet-only with valu
 
 ## Setup (once per session)
 
+Prefer a sandbox when one is available — the CLI needs no host access at all for the fresh-wallet
+flow: `docker build -t bivium-cli . && docker run --rm -it --entrypoint bash bivium-cli` gives a
+disposable environment where keys are generated inside and die with the container (network egress
+to the RPC + relayer origin is the only requirement). Otherwise run directly:
+
 ```bash
-cd /Volumes/T7-Data/bendle/bivium-cli   # repo: jianmliu/bivium-cli
+cd bivium-cli                            # repo: https://github.com/jianmliu/bivium-cli
 npm install                              # first time only
 export BIVIUM_PROFILE=profiles/<profile>.json
 export BIVIUM_PK=0x...                   # signing key — env var ONLY, never a CLI argument
