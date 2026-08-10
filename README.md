@@ -54,8 +54,27 @@ docker run --rm -it --entrypoint bash bivium-cli    # full interactive session i
 ```
 
 Inside the container the zero-trust flow works end to end with no mounts and no host secrets:
-`wallet create` → `wallet gas --to <addr> --via-api` → `mock mint` → trade. Mount a volume only
-if you explicitly want a key to outlive the container.
+`wallet create` → `wallet gas --to <addr> --via-api` → `mock mint` → trade.
+
+**Reuse and key lifetime.** A borrow position is bound to the wallet that opened it — repayment
+must come from the SAME key, so any flow that spans sessions (borrow today, repay later) needs the
+key to outlive a single `docker run --rm`. Two patterns:
+
+```bash
+# A. persistent named container — filesystem (and keys) survive stop/start
+docker run -d --name bivium-agent --entrypoint sleep bivium-cli infinity
+docker exec -it bivium-agent bash          # work sessions, as many as you like
+docker stop bivium-agent && docker start bivium-agent   # state preserved
+docker rm -f bivium-agent                   # explicit end-of-life — keys die here
+
+# B. ephemeral containers + named volume for keys only
+docker volume create bivium-keys
+docker run --rm -it -v bivium-keys:/home/bivium/keys --entrypoint bash bivium-cli
+```
+
+Use `--rm` one-shots only for flows that OPEN AND CLOSE within the session (quote, market list,
+a full borrow→repay cycle, secondary trades from a freshly funded wallet). If a throwaway
+container dies holding an open position, the collateral is orphaned until maturity settlement.
 
 ## Throwaway wallets and gas
 

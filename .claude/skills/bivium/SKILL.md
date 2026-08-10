@@ -21,7 +21,11 @@ plus the safety rules an agent must follow. Everything is testnet-only with valu
 Prefer a sandbox when one is available — the CLI needs no host access at all for the fresh-wallet
 flow: `docker build -t bivium-cli . && docker run --rm -it --entrypoint bash bivium-cli` gives a
 disposable environment where keys are generated inside and die with the container (network egress
-to the RPC + relayer origin is the only requirement). Otherwise run directly:
+to the RPC + relayer origin is the only requirement). BUT: a borrow position is bound to its
+wallet — repay needs the SAME key. Use a `--rm` one-shot only when the flow opens AND closes in
+the session; for anything spanning sessions use a persistent named container
+(`docker run -d --name bivium-agent --entrypoint sleep bivium-cli infinity` + `docker exec`) or a
+named volume for the key files. Otherwise run directly:
 
 ```bash
 cd bivium-cli                            # repo: https://github.com/jianmliu/bivium-cli
