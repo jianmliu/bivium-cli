@@ -34,7 +34,9 @@ import {
   resolveToken,
   strikeFromFloor,
   tickToPrice,
-  TbvClient,
+  VaultAppClient,
+  lotStatusName,
+  lotIsBound,
   RATIFIED,
   ZERO_ADDRESS,
   aggregateLevels,
@@ -90,13 +92,21 @@ usage: bivium <command> [options]
   wallet gas --to <addr> [--via-api]  # third-party claim; --via-api needs no local key at all
   wizard                              # interactive wizard: lend / borrow / trade
 
-  tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]   (key must be redemption issuer)
-  tbv vault-status --token-id <n>
-  tbv fund --token-id <n> --gate <addr> [--maturity <unix>] [--strike <raw>]   (market read from the gate)
-  tbv cancel-funding --token-id <n>
-  tbv borrow --token-id <n> --offer <file> [--deadline <s>]   (signs BorrowAuthorization with the key)
-  tbv repay --token-id <n>
-  tbv redeem-delivered --position-id <bytes32>
+  vault activate --sats <sats> [--vault-id <bytes32>] [--depositor <addr>]   # testnet mock faucet
+  vault list [--account <addr>]
+  vault status --vault-id <bytes32> [--account <viewer>]
+  vault borrow --vault-id <bytes32>[,<bytes32>...] --offer <file> [--receiver <addr>] [--dry-run]
+  vault release|reclaim|mark-delivered --vault-id <bytes32>
+  vault convert|unconvert --vault-id <bytes32>
+  vault convert-delivered --sats <sats>
+  vault redemption post --amount <sats> --min-sats-start <sats> --min-sats-end <sats>
+                        --btc-dest <hex> --deadline <unix>
+  vault redemption cancel --id <n>
+  vault redemption list [--limit N] [--account <addr>]
+  vault keeper fill --id <n> --txid <bytes32>
+  vault keeper settle --vault-id <bytes32>
+  vault invariant [--account <addr>]
+  (vault amounts are integer sats; outputs also show BTC)
 
 market flags: --loan <symbol|addr> --collateral <symbol|addr> --maturity <unix>
               (--floor <human> | --strike <raw>) [--allow-partial] [--gate <addr>]
@@ -132,8 +142,15 @@ const OPTIONS = {
   "via-api": { type: "boolean", default: false },
   "from-block": { type: "string" },
   "acknowledge-itm": { type: "boolean", default: false },
-  "token-id": { type: "string" },
-  "position-id": { type: "string" },
+  "vault-id": { type: "string" },
+  depositor: { type: "string" },
+  sats: { type: "string" },
+  "min-sats-start": { type: "string" },
+  "min-sats-end": { type: "string" },
+  "btc-dest": { type: "string" },
+  id: { type: "string" },
+  txid: { type: "string" },
+  limit: { type: "string" },
   deadline: { type: "string" },
   depth: { type: "string" },
   source: { type: "string" },
@@ -227,15 +244,26 @@ function client(ctx: Ctx, signing: boolean): BiviumClient {
   return new BiviumClient(ctx.profile, signing ? accountFor(ctx) : undefined);
 }
 
-function tbvClient(ctx: Ctx, signing: boolean): TbvClient {
-  return new TbvClient(ctx.profile, signing ? loadKeyAccount(ctx.keyEnv) : undefined);
+function vaultClient(ctx: Ctx, signing: boolean): VaultAppClient {
+  return new VaultAppClient(ctx.profile, signing ? accountFor(ctx) : undefined);
 }
 
-/** Vault token ids and amounts are raw unitless integers, never token-decimal scaled. */
+/** Vault-app amounts are integer sats (and ids plain integers), never token-decimal scaled. */
 function rawBigInt(value: string | undefined, flag: string): bigint {
   const v = need(value, flag);
   if (!/^\d+$/.test(v)) fail(`--${flag} must be a non-negative integer`);
   return BigInt(v);
+}
+
+function bytes32Flag(value: string | undefined, flag: string): Hex {
+  const v = need(value, flag);
+  if (!/^0x[0-9a-fA-F]{64}$/.test(v)) fail(`--${flag} must be a bytes32 hex value`);
+  return v as Hex;
+}
+
+/** sats → "0.001 BTC (100000 sats)" */
+function btc(sats: bigint): string {
+  return `${formatAmount(sats, 8)} BTC (${sats} sats)`;
 }
 
 function relayerDomain(profile: DeploymentProfile): RelayerDomain {
@@ -1074,96 +1102,252 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { ...tx }, `claimed ${formatAmount(units, loanDecimals)} DCN face: ${tx.hash}`);
   },
 
-  "tbv create-vault": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
-    const amount = rawBigInt(ctx.values.amount as string | undefined, "amount");
-    const c = tbvClient(ctx, true);
-    const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : c.account;
-    const tx = await c.tbvCreateVault(receiver, tokenId, amount);
-    output(ctx.json, { ...tx, tokenId, amount, receiver }, `vault ${tokenId} created: ${amount} units to ${receiver} — tx ${tx.hash}`);
-  },
-
-  "tbv vault-status": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
-    const c = tbvClient(ctx, false);
-    const s = await c.vaultStatus(tokenId);
-    if (!s.created) {
-      output(ctx.json, { created: false }, `vault ${tokenId}: not created`);
-      return;
-    }
-    const p = s.position;
+  "vault activate": async (ctx) => {
+    const sats = rawBigInt(ctx.values.sats as string | undefined, "sats");
+    const vaultId = typeof ctx.values["vault-id"] === "string"
+      ? bytes32Flag(ctx.values["vault-id"], "vault-id")
+      : (`0x${randomBytes(32).toString("hex")}` as Hex);
+    const c = vaultClient(ctx, true);
+    const depositor = typeof ctx.values.depositor === "string" ? (getAddress(ctx.values.depositor) as Address) : c.account;
+    const r = await c.activateMock(vaultId, depositor, sats);
     output(
       ctx.json,
-      { ...s },
+      { ...r },
       [
-        `vault ${tokenId} (${s.completeSupply} units complete)`,
-        `  state:           ${s.stateName}${s.isDelivered ? " (DELIVERED)" : ""}`,
-        `  originalOwner:   ${p?.originalOwner}`,
-        `  positionAccount: ${p?.positionAccount}`,
-        `  marketId:        ${p?.marketId}`,
-        `  fundingNonce:    ${p?.fundingNonce}`,
-        `  borrowedFace:    ${p?.borrowedFace} (raw loan units)`,
-        `  receiptAmount:   ${p?.receiptAmount}`,
-        `  positionId:      ${s.positionId}`,
-        `  balances:        manager ${s.managerBalance} / owner ${s.ownerBalance}`,
+        `mock vault activated: ${vaultId}`,
+        `  depositor: ${depositor}`,
+        `  amount:    ${btc(sats)} vaultBTC minted, lot Reserved`,
+        `  tx ${r.hash}`,
       ].join("\n"),
     );
   },
 
-  "tbv fund": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
-    const gate = getAddress(need(ctx.values.gate as string | undefined, "gate")) as Address;
-    const c = tbvClient(ctx, true);
-    const { params } = await c.gateMarket(gate);
-    // Optional cross-checks: flags must agree with what the gate is immutably bound to.
-    if (typeof ctx.values.maturity === "string" && BigInt(ctx.values.maturity) !== params.maturity) {
-      fail(`--maturity ${ctx.values.maturity} != gate maturity ${params.maturity}`);
-    }
-    if (typeof ctx.values.strike === "string" && BigInt(ctx.values.strike) !== params.strike) {
-      fail(`--strike does not match gate strike ${params.strike}`);
-    }
-    const tx = await c.tbvFund(tokenId, gate);
+  "vault list": async (ctx) => {
+    const c = vaultClient(ctx, false);
+    const account = getAddress(typeof ctx.values.account === "string" ? ctx.values.account : accountFor(ctx).address) as Address;
+    const lots = await c.listLots(account);
+    const views = await c.resolveLots(lots, account);
+    const rows = views.map((v) => ({
+      vaultId: v.lot.vaultId,
+      status: lotStatusName(v.lot.status),
+      amount: v.lot.amount,
+      loanId: lotIsBound(v.lot) ? v.lot.loanId : null,
+      borrower: lotIsBound(v.lot) ? v.lot.borrower : null,
+      maturity: lotIsBound(v.lot) ? v.lot.maturity : null,
+      converted: v.lot.converted,
+      state: v.state,
+      action: v.action,
+      secondary: v.secondary,
+      convert: v.convert === true,
+    }));
     output(
       ctx.json,
-      { ...tx },
-      `vault ${tokenId} funded into market ${tx.marketId} (nonce ${tx.expectedFundingNonce}, max face ${tx.maximumFace}): ${tx.hash}`,
+      { account, count: rows.length, lots: rows },
+      rows.length === 0
+        ? `no vaults wrapped for ${account} (vault activate --sats <sats> opens a mock one on testnet)`
+        : [
+            `${rows.length} vault(s) wrapped for ${account}`,
+            ...rows.map((r) => `  ${r.vaultId}\n    ${r.status}${r.converted ? " (converted)" : ""}  ${btc(r.amount)}${r.loanId ? `  loan ${r.loanId.slice(0, 10)}… maturity ${r.maturity}` : ""}\n    ${r.state}`),
+          ].join("\n"),
     );
   },
 
-  "tbv cancel-funding": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
-    const tx = await tbvClient(ctx, true).tbvCancelFunding(tokenId);
-    output(ctx.json, { ...tx }, `funding cancelled, vault ${tokenId} returned: ${tx.hash}`);
+  "vault status": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const c = vaultClient(ctx, false);
+    const viewer = typeof ctx.values.account === "string" ? (getAddress(ctx.values.account) as Address) : undefined;
+    const v = await c.resolveLot(vaultId, viewer);
+    const l = v.lot;
+    const bound = lotIsBound(l);
+    const next = [
+      v.action === "reclaim" && v.convert ? "borrow (vault borrow), convert (vault convert), or reclaim (vault reclaim)" : "",
+      v.action === "reclaim" && !v.convert ? "reclaim (vault reclaim)" : "",
+      v.secondary === "release" ? "release the binding to borrow again (vault release)" : "",
+      v.action === "repay-first" ? "repay the exact face on the core (bivium repay), then bivium reclaim, then vault release" : "",
+      v.action === "withdraw-first" ? "withdraw the group's collateral (bivium reclaim), then vault release or vault reclaim" : "",
+      v.action === "unconvert" ? "unconvert (burn equal TBVBTC) while no keeper has settled it" : "",
+      v.action === "awaiting-settle" ? "keeper: vault keeper settle" : "",
+      v.action === "none" ? "none" : "",
+    ].filter(Boolean).join("; ");
+    output(
+      ctx.json,
+      { ...l, statusName: lotStatusName(l.status), state: v.state, action: v.action, secondary: v.secondary, convert: v.convert === true },
+      [
+        `vault ${vaultId}`,
+        `  status:        ${lotStatusName(l.status)}${l.converted ? " (converted)" : ""}`,
+        `  origin:        ${l.origin}`,
+        `  amount:        ${btc(l.amount)}`,
+        ...(bound ? [`  loanId:        ${l.loanId}`, `  borrower:      ${l.borrower}`, `  maturity:      ${l.maturity}`] : [`  loan:          unbound`]),
+        `  keeperVersion: ${l.keeperVersion}`,
+        `  state:         ${v.state}`,
+        `  next:          ${next}`,
+      ].join("\n"),
+    );
   },
 
-  "tbv borrow": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
+  "vault borrow": async (ctx) => {
+    const ids = need(ctx.values["vault-id"] as string | undefined, "vault-id").split(",").map((v) => bytes32Flag(v.trim(), "vault-id"));
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
-    const deadlineSeconds = typeof ctx.values.deadline === "string" ? BigInt(ctx.values.deadline) : undefined;
-    const c = tbvClient(ctx, true);
     const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
-    const result = await c.tbvBorrow(tokenId, file.offer, file.signature, { deadlineSeconds });
+    const receiver = typeof ctx.values.receiver === "string" ? (getAddress(ctx.values.receiver) as Address) : undefined;
+    const dryRun = ctx.values["dry-run"] === true;
+    const c = vaultClient(ctx, true);
+    if (dryRun) {
+      const q = await c.quoteBorrow(ids, file.offer, c.account);
+      const p = await c.borrowPrereqs(ids);
+      const status = await c.offerStatus(file.offer, file.signature);
+      output(
+        ctx.json,
+        { dryRun: true, ...q, lots: q.lots.map((l) => l.vaultId), approved: p.approved, granted: p.granted, remainingUnits: status.remainingUnits, ratified: status.ratified, withinWindow: status.withinWindow },
+        [
+          `whole-lot borrow (dry run) — ${ids.length} vault(s), ${btc(q.sumSats)}`,
+          `  market:     ${q.marketId}`,
+          `  face:       ${formatAmount(q.face, loanDecimals)} (Σsats × strike / 1e36)`,
+          `  swept credit: ${formatAmount(q.credit, loanDecimals)} → units filled ${formatAmount(q.units, loanDecimals)}`,
+          `  price:      ${formatAmount(q.priceWad, 18)} (tick ${file.offer.tick})`,
+          `  principal:  ${formatAmount(q.principal, loanDecimals)} (receiver gets)`,
+          `  offer:      remaining ${formatAmount(status.remainingUnits, loanDecimals)}, window ${status.withinWindow ? "open" : "CLOSED"}, precheck ${status.ratified ? "RATIFIED" : "FAILED"}`,
+          `  prereqs:    vaultBTC approve ${p.approved ? "ok" : "NEEDED"}, CAP_FILL grant ${p.granted ? "ok" : "NEEDED"}`,
+        ].join("\n"),
+      );
+      return;
+    }
+    const pre = await c.ensureBorrowPrereqs(ids);
+    if (pre.approveTx) console.error(`approved ${pre.sumSats} sats vaultBTC to the app: ${pre.approveTx.hash}`);
+    if (pre.grantTx) console.error(`granted CAP_FILL to the app: ${pre.grantTx.hash}`);
+    const r = await c.borrowAgainst(ids, file.offer, file.signature, receiver);
     output(
       ctx.json,
-      { ...result },
-      `borrowed against vault ${tokenId}: received ${formatAmount(result.principal, loanDecimals)} for ${formatAmount(result.face, loanDecimals)} face — tx ${result.hash}`,
+      { ...r, lots: r.lots.map((l) => l.vaultId), approveTx: pre.approveTx?.hash, grantTx: pre.grantTx?.hash },
+      [
+        `borrowed against ${ids.length} vault(s) (${btc(r.sumSats)}): received ${formatAmount(r.principal, loanDecimals)} for ${formatAmount(r.units, loanDecimals)} units (face ${formatAmount(r.face, loanDecimals)} + swept credit ${formatAmount(r.credit, loanDecimals)}) — tx ${r.hash}`,
+        `  loan ${r.loanId} — repay the exact face before maturity ${file.offer.maturity} (bivium repay), then bivium reclaim, then vault release`,
+      ].join("\n"),
     );
   },
 
-  "tbv repay": async (ctx) => {
-    const tokenId = rawBigInt(ctx.values["token-id"] as string | undefined, "token-id");
-    const c = tbvClient(ctx, true);
-    const loanToken = (await c.vaultStatus(tokenId)).marketParams?.loanToken;
-    const loanDecimals = loanToken && loanToken !== ZERO_ADDRESS ? await tokenDecimals(ctx, loanToken) : 0;
-    const tx = await c.tbvRepay(tokenId);
-    output(ctx.json, { ...tx }, `repaid ${formatAmount(tx.repaid, loanDecimals)}, vault ${tokenId} returned to owner: ${tx.hash}`);
+  "vault release": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const tx = await vaultClient(ctx, true).releaseRepaid(vaultId);
+    output(ctx.json, { ...tx, vaultId }, `repaid group released — vault ${vaultId} is unbound and borrowable again: ${tx.hash}`);
   },
 
-  "tbv redeem-delivered": async (ctx) => {
-    const positionId = need(ctx.values["position-id"] as string | undefined, "position-id");
-    if (!/^0x[0-9a-fA-F]{64}$/.test(positionId)) fail("--position-id must be a bytes32 hex value");
-    const tx = await tbvClient(ctx, true).tbvRedeemDelivered(positionId as Hex);
-    output(ctx.json, { ...tx }, `delivered vault released to keeper: ${tx.hash}`);
+  "vault reclaim": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const tx = await vaultClient(ctx, true).reclaim(vaultId);
+    output(ctx.json, { ...tx, vaultId }, `vault ${vaultId} reclaimed (vaultBTC burned, lot Consumed): ${tx.hash}`);
+  },
+
+  "vault mark-delivered": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const tx = await vaultClient(ctx, true).markDelivered(vaultId);
+    output(ctx.json, { ...tx, vaultId }, `defaulted group marked Delivered (vault ${vaultId}): ${tx.hash}`);
+  },
+
+  "vault convert": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const r = await vaultClient(ctx, true).convert(vaultId);
+    output(
+      ctx.json,
+      { ...r, vaultId, approveTx: r.approveTx?.hash },
+      `vault ${vaultId} converted: ${btc(r.amount)} vaultBTC locked in the escrow, equal TBVBTC minted — tx ${r.hash}${r.approveTx ? ` (approve ${r.approveTx.hash})` : ""}`,
+    );
+  },
+
+  "vault unconvert": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const r = await vaultClient(ctx, true).unconvert(vaultId);
+    output(
+      ctx.json,
+      { ...r, vaultId },
+      `vault ${vaultId} unconverted (${r.wasDefault ? "was defaulted" : "was converted"}): ${btc(r.amount)} TBVBTC burned, vault back as a fresh Reserved lot — tx ${r.hash}`,
+    );
+  },
+
+  "vault convert-delivered": async (ctx) => {
+    const sats = rawBigInt(ctx.values.sats as string | undefined, "sats");
+    const r = await vaultClient(ctx, true).convertDelivered(sats);
+    output(ctx.json, { ...r, sats, approveTx: r.approveTx?.hash }, `${btc(sats)} delivered vaultBTC converted to TBVBTC: ${r.hash}`);
+  },
+
+  "vault redemption post": async (ctx) => {
+    const v = ctx.values;
+    const input = {
+      amount: rawBigInt(v.amount as string | undefined, "amount"),
+      minSatsStart: rawBigInt(v["min-sats-start"] as string | undefined, "min-sats-start"),
+      minSatsEnd: rawBigInt(v["min-sats-end"] as string | undefined, "min-sats-end"),
+      btcDest: need(v["btc-dest"] as string | undefined, "btc-dest") as Hex,
+      deadline: rawBigInt(v.deadline as string | undefined, "deadline"),
+    };
+    if (!/^0x[0-9a-fA-F]+$/.test(input.btcDest) || input.btcDest.length % 2 !== 0) fail("--btc-dest must be hex bytes (0x…)");
+    const r = await vaultClient(ctx, true).postRedemption(input);
+    output(
+      ctx.json,
+      { ...r, ...input, approveTx: r.approveTx?.hash },
+      [
+        `redemption order #${r.id} posted: ${btc(input.amount)} TBVBTC escrowed — tx ${r.hash}`,
+        `  asks ${input.minSatsStart} → ${input.minSatsEnd} native sats to ${input.btcDest} by ${input.deadline}; cancelable after the deadline if unfilled`,
+      ].join("\n"),
+    );
+  },
+
+  "vault redemption cancel": async (ctx) => {
+    const id = rawBigInt(ctx.values.id as string | undefined, "id");
+    const r = await vaultClient(ctx, true).cancelRedemption(id);
+    output(ctx.json, { ...r, id }, `redemption order #${id} cancelled, ${btc(r.amount)} TBVBTC returned: ${r.hash}`);
+  },
+
+  "vault redemption list": async (ctx) => {
+    const limit = typeof ctx.values.limit === "string" ? Number(ctx.values.limit) : 20;
+    if (!Number.isInteger(limit) || limit <= 0) fail("--limit must be a positive integer");
+    const c = vaultClient(ctx, false);
+    const me = typeof ctx.values.account === "string"
+      ? (getAddress(ctx.values.account) as Address)
+      : process.env[ctx.keyEnv] || ctx.values["key-file"] ? (accountFor(ctx).address as Address) : undefined;
+    const rows = await c.listRedemptions(limit, me);
+    output(
+      ctx.json,
+      { count: rows.length, rows },
+      rows.length === 0
+        ? "redemption book is empty"
+        : [
+            `${rows.length} most recent redemption order(s)`,
+            ...rows.map(
+              (r) =>
+                `  #${r.id}  ${r.closed ? "CLOSED" : "open"}  ${btc(r.amount)}  min now ${r.minSatsNow} sats (${r.minSatsStart} → ${r.minSatsEnd})  deadline ${r.deadline}  owner ${r.owner}${r.mine ? " (mine)" : ""}${r.cancelable ? " [cancelable]" : ""}\n      dest ${r.btcDest}`,
+            ),
+          ].join("\n"),
+    );
+  },
+
+  "vault keeper fill": async (ctx) => {
+    const id = rawBigInt(ctx.values.id as string | undefined, "id");
+    const txid = bytes32Flag(ctx.values.txid as string | undefined, "txid");
+    const r = await vaultClient(ctx, true).claimFill(id, txid);
+    output(ctx.json, { ...r, id, btcTxid: txid }, `redemption order #${id} filled: ${btc(r.amount)} TBVBTC claimed against ${r.minSatsDue} native sats due (btc txid ${txid}) — tx ${r.hash}`);
+  },
+
+  "vault keeper settle": async (ctx) => {
+    const vaultId = bytes32Flag(ctx.values["vault-id"] as string | undefined, "vault-id");
+    const tx = await vaultClient(ctx, true).settleDelivered(vaultId);
+    output(ctx.json, { ...tx, vaultId }, `delivered vault ${vaultId} settled: keeper TBVBTC + locked vaultBTC burned, vault redeemed to the keeper's AVK key — tx ${tx.hash}`);
+  },
+
+  "vault invariant": async (ctx) => {
+    const c = vaultClient(ctx, false);
+    const account = typeof ctx.values.account === "string"
+      ? (getAddress(ctx.values.account) as Address)
+      : process.env[ctx.keyEnv] || ctx.values["key-file"] ? (accountFor(ctx).address as Address) : undefined;
+    const r = await c.checkInvariant(account);
+    output(
+      ctx.json,
+      { ...r },
+      [
+        `escrow invariant: ${r.balanced ? "BALANCED ✓" : "BROKEN ✗"} — locked vaultBTC ${btc(r.lockedVaultBtc)} vs TBVBTC supply ${btc(r.tbvbtcSupply)}`,
+        `  vaultBTC total supply: ${btc(r.vaultBtcSupply)}`,
+        ...(r.account ? [`  ${r.account}: vaultBTC ${btc(r.accountVaultBtc ?? 0n)}, TBVBTC ${btc(r.accountTbvbtc ?? 0n)}`] : []),
+      ].join("\n"),
+    );
   },
 
   "wallet create": async (ctx) => {
@@ -1245,8 +1429,8 @@ async function main(): Promise<void> {
     return;
   }
   const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true });
-  const commandKey = positionals.slice(0, 2).join(" ");
-  const command = commands[commandKey] ?? commands[positionals[0] ?? ""];
+  const commandKey = positionals.slice(0, 3).join(" ");
+  const command = commands[commandKey] ?? commands[positionals.slice(0, 2).join(" ")] ?? commands[positionals[0] ?? ""];
   if (!command) fail(`unknown command ${JSON.stringify(commandKey)}\n\n${USAGE}`);
   const profilePath = (values.profile as string | undefined) ?? process.env.BIVIUM_PROFILE;
   if (!profilePath) fail("no profile: pass --profile <path> or set BIVIUM_PROFILE");

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { getAddress } from "viem";
-import type { Address, DeploymentProfile, TbvSection, TokenInfo } from "./types.ts";
+import type { Address, DeploymentProfile, TokenInfo, VaultAppSection } from "./types.ts";
 
 function requireAddress(value: unknown, label: string): Address {
   if (typeof value !== "string") throw new Error(`profile ${label} missing`);
@@ -35,18 +35,23 @@ export function loadProfile(path: string): DeploymentProfile {
       };
     }
   }
-  let tbv: TbvSection | undefined;
   if (raw.tbv !== undefined) {
-    if (typeof raw.tbv !== "object" || raw.tbv === null) throw new Error("profile tbv must be an object");
-    const t = raw.tbv as Record<string, unknown>;
-    tbv = {
-      factory: requireAddress(t.factory, "tbv.factory"),
-      manager: requireAddress(t.manager, "tbv.manager"),
-      receipt: requireAddress(t.receipt, "tbv.receipt"),
-      vaultToken: requireAddress(t.vaultToken, "tbv.vaultToken"),
-      keeper: requireAddress(t.keeper, "tbv.keeper"),
-      redemption: requireAddress(t.redemption, "tbv.redemption"),
-      redemptionAsset: requireAddress(t.redemptionAsset, "tbv.redemptionAsset"),
+    throw new Error("profile.tbv is the retired core-tbv canary; use profile.vaultApp");
+  }
+  let vaultApp: VaultAppSection | undefined;
+  if (raw.vaultApp !== undefined) {
+    if (typeof raw.vaultApp !== "object" || raw.vaultApp === null) throw new Error("profile vaultApp must be an object");
+    const v = raw.vaultApp as Record<string, unknown>;
+    if (typeof v.appBlock !== "number" || !Number.isInteger(v.appBlock) || v.appBlock < 0) {
+      throw new Error("profile vaultApp.appBlock must be a non-negative integer");
+    }
+    vaultApp = {
+      registry: requireAddress(v.registry, "vaultApp.registry"),
+      app: requireAddress(v.app, "vaultApp.app"),
+      vaultBtc: requireAddress(v.vaultBtc, "vaultApp.vaultBtc"),
+      escrow: requireAddress(v.escrow, "vaultApp.escrow"),
+      tbvbtc: requireAddress(v.tbvbtc, "vaultApp.tbvbtc"),
+      appBlock: v.appBlock,
     };
   }
   const gasFaucet = raw.gasFaucet === undefined ? undefined : requireAddress(raw.gasFaucet, "gasFaucet");
@@ -65,7 +70,7 @@ export function loadProfile(path: string): DeploymentProfile {
     rpcUrl: raw.rpcUrl,
     relayerUrl: raw.relayerUrl as string | undefined,
     tokens,
-    tbv,
+    vaultApp,
     gasFaucet,
     gasApi: raw.gasApi as string | undefined,
     coreDeploymentBlock: raw.coreDeploymentBlock as number | undefined,

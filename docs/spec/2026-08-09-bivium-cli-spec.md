@@ -167,76 +167,68 @@ authority is the chain).
 - A full testnet lifecycle (fund → make-offer → borrow → repay → reclaim) reproduces the 2026-08-09
   session using only `bivium` commands.
 
-## TBV (whole vault) extension
+## Whole-lot vault app extension (2026-08-16; replaces the retired core-tbv canary)
 
-Drives one deployed TBV family — `TBVVaultFactory` / `TBVVault1155` / `TBVCollateralManager` /
-`TBVCollateralReceipt` + a redemption implementation — against the domain-bound core-v2 lineage.
-The profile grows an optional `tbv` section
-(`{factory, manager, receipt, vaultToken, keeper, redemption, redemptionAsset}`, all validated
-addresses); TBV commands fail cleanly when it is absent, and every TBV write first runs
-`verifyTbv()`: the section must equal the manager's own immutable bindings and the manager's frozen
-`BORROW_AUTHORIZATION_TYPEHASH` must equal the SDK's locally recomputed typed-data hash
-(`0x6f35331f5a3a01fe3ed68b1169936085c630eee7fb0e4d875643494c1ed74084`).
+Drives one deployed vault-contracts-bivium `BiviumVaultApp` family (TBVBTC lineage: mock BTC
+vault registry / soulbound `VaultBTC` / `VaultBTCEscrow` (FOC) / `TBVBTC` / the app) against the
+domain-bound core-v2 lineage. The profile grows an optional `vaultApp` section
+(`{registry, app, vaultBtc, escrow, tbvbtc, appBlock}` — validated addresses + the app's
+deployment block, the Wrapped-scan floor). A legacy `tbv` key is rejected
+(`profile.tbv is the retired core-tbv canary; use profile.vaultApp`). Vault commands fail cleanly
+when the section is absent; every write first runs `verifyVaultApp()`: core-v2 only, and the
+section must equal the app's immutables `REGISTRY / VAULT_BTC / ESCROW / TBV_BTC / BIVIUM`
+(BIVIUM must be the profile core).
 
 ### Command group
 
 ```
-tbv create-vault --token-id <n> --amount <units> [--receiver <addr>]
-tbv vault-status --token-id <n>
-tbv fund --token-id <n> --gate <addr> [--maturity <unix>] [--strike <raw>]
-tbv cancel-funding --token-id <n>
-tbv borrow --token-id <n> --offer <file> [--deadline <s>]
-tbv repay --token-id <n>
-tbv redeem-delivered --position-id <bytes32>
+vault activate --sats <sats> [--vault-id <bytes32>] [--depositor <addr>]
+vault list [--account <addr>]
+vault status --vault-id <bytes32>
+vault borrow --vault-id <bytes32>[,<bytes32>...] --offer <file> [--receiver <addr>] [--dry-run]
+vault release|reclaim|mark-delivered --vault-id <bytes32>
+vault convert|unconvert --vault-id <bytes32>
+vault convert-delivered --sats <sats>
+vault redemption post --amount <sats> --min-sats-start <sats> --min-sats-end <sats> --btc-dest <hex> --deadline <unix>
+vault redemption cancel --id <n>
+vault redemption list [--limit N]
+vault keeper fill --id <n> --txid <bytes32>
+vault keeper settle --vault-id <bytes32>
+vault invariant
 ```
 
-- `create-vault` runs the testnet redemption's issuer-only `approveCreation` then
-  `factory.createVault` with empty creationData; the signing key must be the redemption issuer
-  (the deployer on the local stack). Vault token ids and amounts are raw unitless integers.
-- `fund` reads the market entirely from the canonical gate (`CHAIN_ID/BIVIUM/LOAN_TOKEN/
-  COLLATERAL_TOKEN/MATURITY/STRIKE/MARKET_ID`), cross-checks the SDK's market hash against the
-  gate's `MARKET_ID` and the factory's `isCanonicalGate`, reads `expectedFundingNonce` from the
-  chain, and pre-validates the whole-lot quote (`tbvQuote` mirrors `TBVMath.quote`, including the
-  ceil-inverse round-trip check). Optional `--maturity/--strike` flags are cross-checks only.
-- `borrow` takes a standard signed-offer file. The manager constrains the offer: it must be a
-  resting BUY bid whose maker is the family's KEEPER role and whose market prefix equals the funded
-  market. The CLI rebuilds the `BorrowAuthorization` from the live on-chain `VaultPosition`
-  (amount/receiptAmount/positionAccount/marketId/fundingNonce, `face` = the exact maximum face),
-  signs it with the borrower key, and submits `manager.borrow(auth, sig, offer, ratifierData)`.
-  Postcondition: the borrower's loan-token delta equals the locally quoted principal exactly.
-- `repay` approves the exact face to the manager and calls `manager.repay`; postconditions require
-  the complete vault back in the owner's ERC-1155 balance and state `Repaid`.
-- `redeem-delivered` releases one defaulted vault to the keeper by its
-  `keccak256(abi.encode(token, tokenId, fundingNonce))` position id.
+Amounts are integer sats. Lot lifecycle (`lots(vaultId)` → `{origin, amount, status, loanId,
+borrower, maturity, converted, keeperVersion}`, status None/Reserved/Delivered/Consumed):
 
-### BorrowAuthorization signing model
+- `Reserved` unbound (`loanId == 0`): borrowable / convertible / reclaimable. Bound: collateral of
+  a live core loan (`loanId` == core market id, `core.position(loanId, borrower).debt > 0`);
+  repaid: `bivium repay` → `bivium reclaim` (withdraw collateral) → `vault release`
+  (`releaseRepaid`, permissionless, whole group unbinds) or `vault reclaim` (whole-group burn).
+- `Delivered`: via `convert` (origin, `converted = true`) or default (`markDelivered`,
+  permissionless once `block.timestamp >= maturity && debt > 0`). Unsettled: origin
+  `unconvert` (burn equal TBVBTC → same vault back as fresh Reserved); keeper `settleDelivered`
+  (burn its TBVBTC + the locked vaultBTC, redeem to its AVK key → Consumed).
+- `Consumed`: left the system. vaultBTC never burns on convert — it locks in the escrow;
+  invariant `vaultBTC.balanceOf(escrow) == TBVBTC.totalSupply()` (`vault invariant`).
 
-EIP-712 with the SignatureRatifier's minimal domain — `EIP712Domain(uint256 chainId,address
-verifyingContract)`, verifyingContract = the manager, no name/version — over the 15-field frozen
-struct `BorrowAuthorization(uint256 chainId,address manager,address bivium,address token,uint256
-tokenId,uint256 amount,uint256 receiptAmount,address positionAccount,bytes32 marketId,uint256
-fundingNonce,uint256 face,bytes32 offerCommitment,address borrower,uint256 deadline,uint256
-intentNonce)`. The manager only accepts a signature from the vault's original owner, the fields are
-all pinned to the live position (any cancel bumps `fundingNonce` and invalidates every outstanding
-authorization), `offerCommitment` binds the exact keeper bid (`hashOffer`), and `intentNonce` is
-single-use per borrower. Before signing, the SDK cross-checks its local digest against
-`manager.borrowAuthorizationDigest(auth)` and refuses on mismatch.
-
-### Local-anvil acceptance
-
-`script/DeployTBVLocal.s.sol` (bivium-core worktree) deploys core + SignatureRatifier + 6-decimal
-mock USDC, then redemption → exposure asset → receipt → factory (→ vault token) → manager in the
-canonical `vm.computeCreateAddress` order, then one `createMarketGate(31337, USDC, now+30d, 1e42)`
-— strike 1e42 = 1.000000 USDC face per whole vault unit, so whole-lot math is exact. Fresh anvil +
-account 0 as deployer gives the stable addresses pinned in `profiles/anvil-tbv-local.json`; the
-KEEPER role is account 0 itself (the maker EOA), the redemption issuer is the deployer. The
-recorded acceptance run uses only `bivium` commands: maker `mock mint` → `maker set-ratifier` →
-`maker fund` (gated market) → `maker make-offer --gate …` → `tbv create-vault` (receiver = account
-1) → borrower `tbv fund` → `tbv borrow` (received 99.182134 USDC for 100 face at tick 3872) →
-`tbv repay` (exact 100 face) → `tbv vault-status` shows `Repaid`, fundingNonce bumped to 1, and
-the complete vault back in the owner's balance. `test/tbv.test.ts` pins the typehash, a
-chain-verified BorrowAuthorization digest, positionId hashes, and the whole-lot quote math as
-offline golden vectors.
+`vault activate` is the testnet faucet: `MockBtcVaultRegistry.activate(app, vaultId, depositor,
+sats)` is permissionless (random 32-byte id when `--vault-id` is omitted; postcondition: a
+Reserved lot of that size for the depositor). `vault borrow` mirrors the app's `_openGroup`:
+every id must be Reserved, unbound, origin == caller; the offer must be a lender BUY bid on the
+family's vaultBTC with `allowPartialRepay == false`; face = Σsats × strike / 1e36
+(`assertWholeLotStrike` requires the ceil-inverse to reproduce Σsats — an off-grid strike would
+revert `NotWholeVaultEscrow`); units = face + `core.creditOf(marketId, borrower)` (the app sweeps
+existing credit into the fill); prerequisites `vaultBTC.approve(app, Σsats)` and a one-time
+`core.grantAuthorization(app, CAP_FILL=4, 0)` (checked via `grantOf`, granted iff
+`(caps & 4) == 4 && (expiry == 0 || now <= expiry)`) are sent only when missing;
+`offerStatus` prechecks; postconditions: receiver loan-token delta == quoted principal and the
+`Borrowed` event's `(units, principal)` == the quote. `--dry-run` prints face / swept credit /
+units / principal / prerequisite state without sending. The redemption book mirrors `BadOrder`
+locally, escrows TBVBTC with an exact approval, returns the id from `RedemptionPosted`, and
+`cancel` enforces owner + open + past deadline. `test/vaultApp.test.ts` pins the whole-lot face
+vector (400000 sats at the $60k dust-free strike → 240 USDC face), the `grantCoversFill` matrix,
+lot-state resolution at every stage (mirrors the frontend's `lotView`), redemption cancelability,
+`minSatsAt` decay, and profile parsing (round-trip + legacy `tbv` rejection).
 
 ## DCN trading extension (2026-08-10)
 

@@ -25,7 +25,25 @@
       "address": "0xfd5528653869701FB7d6831060F59B2013634002",
       "decimals": 8,
       "mintable": true
+    },
+    "vaultBTC": {
+      "address": "0xE39e970224Ed063EE4CF61B84B872966e054E2af",
+      "decimals": 8,
+      "mintable": false
+    },
+    "TBVBTC": {
+      "address": "0x770Da472be5F38c2bC5dD1329c236C0c3BA23E80",
+      "decimals": 8,
+      "mintable": false
     }
+  },
+  "vaultApp": {
+    "registry": "0x23A3B538e281714Ef9bf6C7D72edD33184d99bc1",
+    "app": "0x19840009e6743b959A395c2517CA72D89c3F865D",
+    "vaultBtc": "0xE39e970224Ed063EE4CF61B84B872966e054E2af",
+    "escrow": "0x29dB99FDaD21D5951399BAADB0c0CA2654B54386",
+    "tbvbtc": "0x770Da472be5F38c2bC5dD1329c236C0c3BA23E80",
+    "appBlock": 11495059
   },
   "gasFaucet": "0xd018fC5B23Da5657e558A402EA3d9309a1707E02",
   "gasApi": "https://dev.bivium.pages.dev/api/gas",

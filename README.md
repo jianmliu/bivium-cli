@@ -116,60 +116,63 @@ via `--key-file` with a permissions check.
   the `RATIFIED` magic for the commitment.
 - Keys come from an env var (`--key-env NAME`, default `BIVIUM_PK`); never argv, never logged.
 
-## TBV (whole vault, ERC-1155)
+## Whole-lot vault app (vaultBTC / TBVBTC)
 
-The `tbv` command group drives a deployed TBV family (factory / vault token / collateral manager /
-receipt / redemption) on the core-v2 lineage: escrow one complete canonical ERC-1155 vault, borrow
-its exact whole-lot face against a keeper's resting bid, repay the face and get the vault back —
-or release a defaulted vault to the keeper. Profiles carry the family in an optional `tbv` section
-(`{factory, manager, receipt, vaultToken, keeper, redemption, redemptionAsset}`); TBV commands fail
-cleanly without it, and `verifyTbv()` cross-checks the section against the manager's immutable
-bindings plus the frozen `BORROW_AUTHORIZATION_TYPEHASH` before any write.
+The `vault` command group drives a deployed vault-contracts-bivium `BiviumVaultApp` family
+(TBVBTC lineage) on the core-v2 lineage. Profiles carry it in an optional `vaultApp` section
+(`{registry, app, vaultBtc, escrow, tbvbtc, appBlock}`); vault commands fail cleanly without it,
+and `verifyVaultApp()` cross-checks the section against the app's immutable bindings
+(`REGISTRY / VAULT_BTC / ESCROW / TBV_BTC / BIVIUM`) before any write. The retired core-tbv
+ERC-1155 canary (`profile.tbv`, `tbv *`) is gone; a profile that still carries `tbv` is rejected.
+
+**Lifecycle.** A vault comes in as a *lot* (on testnet the mock registry's permissionless
+`activate` is the faucet: `vault activate --sats N` mints N sats of soulbound vaultBTC to the
+depositor and opens a `Reserved` lot). An unbound Reserved lot has three roads: **borrow** against
+it (`vault borrow`: the app escrows the WHOLE group of vaults into ONE lender bid on the
+vaultBTC/USDC market with the borrower as taker — face = Σsats × strike / 1e36 plus any credit the
+borrower already holds there, which the app sweeps), **convert** it (`vault convert`: the door to
+TBVBTC — the lot's vaultBTC locks in the escrow, never burns, and equal fungible TBVBTC is minted;
+lot → `Delivered`), or **reclaim** it (`vault reclaim`: burn the vaultBTC, lot → `Consumed`, vault
+out). A borrowed lot is collateral of a live core loan: repay the exact face on the core
+(`bivium repay`), withdraw the collateral (`bivium reclaim`), then `vault release` clears the
+binding so the group is borrowable again — or `vault reclaim` exits. Unpaid at maturity, anyone
+may `vault mark-delivered` the group (defaulted, `Delivered`). While a Delivered lot is unsettled —
+converted or defaulted alike — the origin may `vault unconvert` by burning equal TBVBTC and gets the
+SAME vault back as a fresh Reserved lot; a registered keeper may `vault keeper settle` it by
+burning its own TBVBTC (lot → `Consumed`, vault redeemed to the keeper's AVK key). TBVBTC exits to
+native BTC through the redemption book (`vault redemption post|cancel|list`, keeper `vault keeper
+fill`). Invariant at every block: `vaultBTC.balanceOf(escrow) == TBVBTC.totalSupply()`
+(`vault invariant`).
 
 ```bash
-npm run cli -- tbv create-vault --token-id 1 --amount 100 --receiver 0x…   # key = redemption issuer
-npm run cli -- tbv vault-status --token-id 1
-npm run cli -- tbv fund --token-id 1 --gate 0x…        # market read + cross-checked from the gate
-npm run cli -- tbv borrow --token-id 1 --offer bid.json  # signs the EIP-712 BorrowAuthorization
-npm run cli -- tbv repay --token-id 1                    # exact face; vault returns to the owner
-npm run cli -- tbv cancel-funding --token-id 1
-npm run cli -- tbv redeem-delivered --position-id 0x…
+export BIVIUM_PROFILE=profiles/sepolia-routerv3-v2.json
+npm run cli -- vault activate --sats 400000                 # testnet mock vault (0.004 BTC), random id
+npm run cli -- vault list                                   # my lots + resolved next action
+npm run cli -- vault status --vault-id 0x…
+npm run cli -- vault borrow --vault-id 0x…[,0x…] --offer bid.json --dry-run   # face/units/principal
+npm run cli -- vault borrow --vault-id 0x… --offer bid.json # approve + CAP_FILL grant (once) + borrowAgainst
+npm run cli -- repay --offer bid.json --assets 240 && npm run cli -- reclaim --offer bid.json
+npm run cli -- vault release --vault-id 0x…                 # repaid group → unbound, borrowable again
+npm run cli -- vault convert --vault-id 0x…                 # → TBVBTC (lock, not burn)
+npm run cli -- vault unconvert --vault-id 0x…               # burn equal TBVBTC, same vault back
+npm run cli -- vault reclaim --vault-id 0x…                 # vault out
+npm run cli -- vault mark-delivered --vault-id 0x…          # permissionless default mark at maturity
+npm run cli -- vault convert-delivered --sats 100000        # claim-hook fallback for delivered vaultBTC
+npm run cli -- vault redemption post --amount 400000 --min-sats-start 400000 --min-sats-end 390000 \
+    --btc-dest 0x0014… --deadline 1790000000
+npm run cli -- vault redemption list --limit 10
+npm run cli -- vault redemption cancel --id 0                # after the deadline, if unfilled
+npm run cli -- vault keeper fill --id 0 --txid 0x…          # keeper: claim escrow after front-paying BTC
+npm run cli -- vault keeper settle --vault-id 0x…           # keeper: burn TBVBTC, redeem the vault
+npm run cli -- vault invariant
 ```
 
-Safety mirrors the base client: whole-lot math (`tbvQuote`) is an exact BigInt mirror of
-`TBVMath.quote` including the ceil-inverse round trip; the `BorrowAuthorization` digest is
-cross-checked against `manager.borrowAuthorizationDigest` before signing; borrow/repay enforce
-balance-delta and vault-return postconditions.
-
-### Anvil quickstart
-
-```bash
-anvil                                   # terminal 1: chain id 31337, default funded accounts
-# terminal 2, in the bivium-core checkout (branch agent/tbv-sepolia-canary-rollout):
-export ANVIL0_PK=0x…                    # anvil account 0 key, via env only
-forge script script/DeployTBVLocal.s.sol:DeployTBVLocal \
-    --rpc-url http://127.0.0.1:8545 --broadcast --private-key "$ANVIL0_PK"
-# Fresh anvil + account-0 deployer reproduces the addresses pinned in
-# profiles/anvil-tbv-local.json. Note the printed TBV_GATE / TBV_MATURITY / TBV_STRIKE.
-
-cd bivium-cli && export BIVIUM_PROFILE=profiles/anvil-tbv-local.json
-export BIVIUM_PK="$ANVIL0_PK"           # account 0 = deployer, redemption issuer, keeper (maker)
-npm run cli -- mock mint --token USDC --to <maker> --amount 1000
-npm run cli -- mock mint --token USDC --to <borrower> --amount 50
-npm run cli -- maker set-ratifier
-npm run cli -- maker fund --loan USDC --collateral TBVR \
-    --maturity $MATURITY --strike $STRIKE --gate $GATE --assets 200
-npm run cli -- maker make-offer --loan USDC --collateral TBVR \
-    --maturity $MATURITY --strike $STRIKE --gate $GATE \
-    --side buy --apr-bps 1000 --max-units 200 --out tbv-bid.json
-npm run cli -- tbv create-vault --token-id 1 --amount 100 --receiver <borrower>
-
-export BIVIUM_PK=<borrower key>         # anvil account 1: vault owner + borrower
-npm run cli -- tbv fund   --token-id 1 --gate $GATE
-npm run cli -- tbv borrow --token-id 1 --offer tbv-bid.json
-npm run cli -- tbv repay  --token-id 1
-npm run cli -- tbv vault-status --token-id 1     # → Repaid, complete vault back with the owner
-```
+Vault amounts are integer **sats** (outputs also show BTC). Safety mirrors the base client:
+whole-lot math is exact BigInt (`wholeLotFace`, `assertWholeLotStrike` refuses off-grid strikes
+that would revert `NotWholeVaultEscrow`); every write pre-reads the lot and mirrors the app's
+guards (`NotOrigin`, `StillBound`, `LoanNotRepaid`, `BadOrder`, …) with a named error before
+spending gas; borrow prechecks the bid via `offerStatus`, then requires the receiver's loan-token
+delta and the `Borrowed` event to equal the local quote exactly.
 
 ## DCN secondary trading (order book, sweeps, relayer)
 

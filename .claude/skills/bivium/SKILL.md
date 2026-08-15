@@ -43,7 +43,6 @@ Pick the profile by target:
 
 | Profile | Target | Notes |
 |---|---|---|
-| `profiles/anvil-tbv-local.json` | local anvil (chain 31337) | safe playground; needs anvil running with the local deployment |
 | `profiles/sepolia-multiloan-v1.json` | Sepolia multi-loan candidate core | 6-field "core-v1" lineage |
 | `profiles/sepolia-routerv3-v2.json` | Sepolia Router V3 core | domain-bound "core-v2" lineage |
 
@@ -214,5 +213,6 @@ npm run cli --silent -- order cancel --offer ask.json
 
 Deep reference: `README.md` and `docs/spec/2026-08-09-bivium-cli-spec.md` in the bivium-cli repo;
 protocol docs in `/Volumes/T7-Data/bendle/bivium-docs/` (`cli.md`, `protocol-overview.md`,
-`using-the-app.md`). An experimental `tbv` command group (whole-vault ERC-1155 collateral) exists
-for local anvil work — read the spec's TBV section before using it.
+`using-the-app.md`). The `vault` command group drives the whole-lot vault app (vaultBTC / TBVBTC:
+mock vault faucet, borrow against whole vaults, convert/unconvert, redemption book, keeper settle)
+on the Sepolia core-v2 profile — read the README's "Whole-lot vault app" section before using it.
