@@ -11,7 +11,7 @@ export * from "./orderbook.ts";
 export * from "./relayer.ts";
 export * from "./trade.ts";
 export * from "./profile.ts";
-export * from "./tbv.ts";
+export * from "./vaultApp.ts";
 export * from "./wallet.ts";
 export * from "./discovery.ts";
 export * from "./spot.ts";

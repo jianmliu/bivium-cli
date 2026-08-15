@@ -30,15 +30,18 @@ export interface TokenInfo {
   mintable?: boolean;
 }
 
-/** Addresses of one deployed TBV (whole-vault ERC-1155) family. `keeper` is the maker-role EOA/contract. */
-export interface TbvSection {
-  factory: Address;
-  manager: Address;
-  receipt: Address;
-  vaultToken: Address;
-  keeper: Address;
-  redemption: Address;
-  redemptionAsset: Address;
+/**
+ * Addresses of one deployed whole-lot vault app family (vault-contracts-bivium `BiviumVaultApp`,
+ * TBVBTC lineage): the (mock) BTC vault registry, the app, the soulbound vaultBTC credential, the
+ * FOC escrow and the fungible TBVBTC claim. `appBlock` is the app's deployment block (Wrapped scan floor).
+ */
+export interface VaultAppSection {
+  registry: Address;
+  app: Address;
+  vaultBtc: Address;
+  escrow: Address;
+  tbvbtc: Address;
+  appBlock: number;
 }
 
 export interface DeploymentProfile {
@@ -51,7 +54,7 @@ export interface DeploymentProfile {
   /** Optional signed-offer relayer origin (http(s)); enables `--source relayer` and `--publish`. */
   relayerUrl?: string;
   tokens?: Record<string, TokenInfo>;
-  tbv?: TbvSection;
+  vaultApp?: VaultAppSection;
   gasFaucet?: Address;
   gasApi?: string;
   coreDeploymentBlock?: number;
