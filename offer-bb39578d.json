@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "abiProfile": "core-v2",
+  "chainId": 11155111,
+  "core": "0x3d60833577De4C4D1c73F4E5bF87Dd4Ced7a0C99",
+  "offer": {
+    "loanToken": "0x1DbF8Dee40739cd2b17C12EC63A67499F9796278",
+    "collateralToken": "0xfd5528653869701FB7d6831060F59B2013634002",
+    "gate": "0x0000000000000000000000000000000000000000",
+    "maker": "0x9931eA03B88c9D0458b3E1900f881205FAA0C54d",
+    "ratifier": "0x08C0aAd2F31F09377898Fdf3C5E5a21C3d6a87E8",
+    "maturity": "1788854400",
+    "strike": "600000000000000000000000000000000000000",
+    "tick": "3880",
+    "maxUnits": "30000000",
+    "maxAssets": "0",
+    "start": "1786380145",
+    "expiry": "1786985245",
+    "allowPartialRepay": false,
+    "buy": true,
+    "group": "0xc8600f4c3a12ba3e74e9385d8f949a8555482df1f04ee271f9f80497986ad03e"
+  },
+  "commitment": "0xbb39578dd4faf70399ffbe3a03e16742d86f7b3727774f7fcc891a45a48357b9",
+  "signature": "0x8a3186387c00fc1ae0e278d2f656a69efc096f988bd0eee4193853c52e35e0112639042b5978670a620c4004a71cd9ea5cd77f29a01ec10fb6dc330a8a507ecf1c"
+}
