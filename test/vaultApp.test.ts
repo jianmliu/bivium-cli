@@ -160,12 +160,12 @@ const PROFILE_BASE = {
   rpcUrl: "https://example.invalid",
 };
 const VAULT_APP = {
-  registry: "0x23A3B538e281714Ef9bf6C7D72edD33184d99bc1",
-  app: "0x19840009e6743b959A395c2517CA72D89c3F865D",
-  vaultBtc: "0xE39e970224Ed063EE4CF61B84B872966e054E2af",
-  escrow: "0x29dB99FDaD21D5951399BAADB0c0CA2654B54386",
-  tbvbtc: "0x770Da472be5F38c2bC5dD1329c236C0c3BA23E80",
-  appBlock: 11495059,
+  registry: "0x206A05a6483E14b55ad9Dbc2d8373AaD14E3f88F",
+  app: "0x5c4807d8F5E6698ed85bff6FD0bF1AAC21388995",
+  vaultBtc: "0x7BC8275C343ed3E722BD0b6E6805170b3eae82FA",
+  escrow: "0x1eE9cD101E172B3b924747bb8d630c481f99284D",
+  tbvbtc: "0xE617081e9A8DCbec4F2Ce946591a286F4b078163",
+  appBlock: 11499525,
 };
 
 function writeProfile(json: unknown): string {
@@ -180,7 +180,7 @@ test("profile: vaultApp section round-trips (checksummed addresses, integer appB
   assert.deepEqual(p.vaultApp, VAULT_APP);
   assert.equal(loadProfile(writeProfile(PROFILE_BASE)).vaultApp, undefined);
   assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, vaultApp: { ...VAULT_APP, appBlock: -1 } })), /appBlock/);
-  assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, vaultApp: { ...VAULT_APP, appBlock: "11495059" } })), /appBlock/);
+  assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, vaultApp: { ...VAULT_APP, appBlock: "11499525" } })), /appBlock/);
   assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, vaultApp: { ...VAULT_APP, escrow: undefined } })), /vaultApp\.escrow/);
   assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, vaultApp: "nope" })), /vaultApp must be an object/);
 });
