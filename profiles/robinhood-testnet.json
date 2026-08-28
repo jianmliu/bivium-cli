@@ -1,0 +1,27 @@
+{
+  "name": "robinhood-testnet",
+  "abiProfile": "core-v2",
+  "chainId": 46630,
+  "core": "0x8943085a473BD89db8b1deB6ca3dc40a9d4CD592",
+  "signatureRatifier": "0x3E60f47BA1d4dE695434e879300914584C851F90",
+  "rpcUrl": "https://rpc.testnet.chain.robinhood.com",
+  "tokens": {
+    "bUSD": {
+      "address": "0x628626de13dd4b5b1cb80d468c261c15df00d717",
+      "decimals": 6,
+      "mintable": true
+    },
+    "TSLA": {
+      "address": "0xC9f9c86933092BbbfFF3CCb4b105A4A94bf3Bd4E",
+      "decimals": 18,
+      "mintable": false
+    },
+    "WETH": {
+      "address": "0x33e4191705c386532ba27cBF171Db86919200B94",
+      "decimals": 18,
+      "mintable": false
+    }
+  },
+  "coreDeploymentBlock": 108911617,
+  "relayerUrl": "https://bivium-robinhood.pages.dev/api"
+}
