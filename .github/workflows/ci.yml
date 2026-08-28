@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    # `main` is the working branch here: PRs land on it directly, so a push run is what verifies the merged result.
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned via .node-version rather than a floating major. This CLI signs offers and computes market ids
+          # that must match a deployed core exactly; a runtime that changes under CI is not a base to verify that on.
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # No step touches a network or a key: every check here is offline. The profiles name live deployments, but
+      # reading one is a developer's action with their own key, never CI's.
