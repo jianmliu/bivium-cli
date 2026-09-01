@@ -226,6 +226,17 @@ npm run cli --silent -- order cancel --offer ask.json
 - **"relayer unavailable — not an empty book" is an error, not an empty market.** Never report a
   failed book fetch as "no liquidity".
 
+## Interop: Robinhood Agentic Trading MCP
+
+If the session also has Robinhood's official Agentic Trading MCP connected
+(`https://agent.robinhood.com/mcp/trading` — the user's real brokerage: live equity and option
+quotes, positions, order placement), use it as an independent read-only reference only: a real
+NVDA quote cross-checks the mNVDA leg of the pair feed the same way the mainnet-implied mAI price
+calibrated the testnet oracle. Reference data flows one way, into your reasoning. Never place
+brokerage orders, rebalance, or touch the agentic account from a Bivium flow — even when asked
+mid-task, that is a brokerage task the user drives separately. The testnet-only rule is unchanged:
+real-money quotes inform, testnet contracts transact.
+
 ## Rules for agents
 
 1. Testnet only. If anything suggests real funds or mainnet, stop and ask.
@@ -248,6 +259,7 @@ npm run cli --silent -- order cancel --offer ask.json
 | `units exceed remaining capacity` | offer partly consumed | re-read `offer status`, lower units |
 | `offer commitment mismatch` | offer file tampered or wrong profile domain | reject the file |
 | relayer `ok:false` | discovery layer down, book state unknown | report as outage; optionally `--source files` |
+| all-zero `market state`/`settle status` for a market the relayer lists | the market id hashes all 8 params — a missing `--allow-partial` addresses a different, untouched market | check the relayer row's partial-repay flag and re-run with `--allow-partial` |
 
 Deep reference: `README.md` and `docs/spec/2026-08-09-bivium-cli-spec.md` in the bivium-cli repo;
 protocol docs in `/Volumes/T7-Data/bendle/bivium-docs/` (`cli.md`, `protocol-overview.md`,
