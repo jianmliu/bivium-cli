@@ -15,9 +15,9 @@ import {
   fetchRelayerMarkets,
   principalForUnits,
   type DiscoveredMarket,
-  fetchSpotUsd,
+  fetchPairRatio,
   floorFromStrike,
-  spotAssetFor,
+  pairFor,
   createWalletFile,
   gasFaucetAbi,
   readKeyFile,
@@ -60,6 +60,7 @@ import {
   type MarketParams,
   type Offer,
 } from "../sdk/index.ts";
+import { SettlerClient, grantCoversSettler, maxSettleableFloor } from "../sdk/settler.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
@@ -86,6 +87,10 @@ usage: bivium <command> [options]
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
+  settle arm (market flags | --offer <file>) --floor <human collateral>   # grant (once) + per-market arm
+  settle disarm (market flags | --offer <file>)
+  settle status (market flags | --offer <file>) [--borrower <addr>]        # floor, cap now, settleable bound
+  settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
@@ -142,6 +147,8 @@ const OPTIONS = {
   "via-api": { type: "boolean", default: false },
   "from-block": { type: "string" },
   "acknowledge-itm": { type: "boolean", default: false },
+  borrower: { type: "string" },
+  ask: { type: "string" },
   "vault-id": { type: "string" },
   depositor: { type: "string" },
   sats: { type: "string" },
@@ -203,6 +210,17 @@ async function tokenDecimals(ctx: Ctx, address: Address): Promise<number> {
 }
 
 /** Market params from --offer file or explicit flags. */
+/// A strike, written in its own unit. `floorFromStrike` always answers loan-per-collateral, and that IS the
+/// number on every market shape — the unit label is what makes it readable on all three product lines, and the
+/// reciprocal hint saves the mental arithmetic on volatile-loan markets, where the human-quoted price is the
+/// other way up ("0.005 mNVDA/bUSD (= 200 bUSD per mNVDA)").
+function fmtStrikeUnit(floor: string, loanSym: string, collSym: string): string {
+  const value = Number(floor);
+  const base = `${floor} ${loanSym}/${collSym}`;
+  if (Number.isFinite(value) && value > 0 && value < 1) return `${base} (= ${(1 / value).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${collSym} per ${loanSym})`;
+  return base;
+}
+
 async function resolveMarket(ctx: Ctx, needDecimals = true): Promise<{ params: MarketParams; loanDecimals: number; collateralDecimals: number }> {
   const v = ctx.values;
   if (typeof v.offer === "string") {
@@ -423,16 +441,22 @@ const { params, loanDecimals, collateralDecimals } = market;
     // whose floor sits at/above spot buys collateral above market — the borrower's rational
     // strategy is to default, so a near-par lend price is a guaranteed loss.
     const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === params.collateralToken);
-    const asset = spotAssetFor(collInfo?.[0]);
-    if (asset) {
-      const spot = await fetchSpotUsd(asset);
-      let floorHuman: string | null = null;
-      try { floorHuman = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { floorHuman = null; }
-      const money = spot !== null && floorHuman !== null ? assessMoneyness(floorHuman, spot) : null;
+    const loanInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === params.loanToken);
+    const pair = pairFor(collInfo?.[0], loanInfo?.[0]);
+    // One rule for every market shape: the strike ratio against the SAME ratio at spot, from the deployment's
+    // pair feed. S ≥ R means the collateral no longer covers the debt it backs — the borrower's rational
+    // strategy is delivery, so a bid near par is a guaranteed loss, whichever leg is the volatile one.
+    if (pair) {
+      const spot = await fetchPairRatio(ctx.profile.relayerUrl, pair);
+      let strikeRatio: string | null = null;
+      try { strikeRatio = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { strikeRatio = null; }
+      const money = spot !== null && strikeRatio !== null ? assessMoneyness(strikeRatio, spot.loanPerCollateral) : null;
       if (money?.itm && ctx.values["acknowledge-itm"] !== true) {
-        fail(`this market's floor (${floorHuman}) is ${((money.ratio - 1) * 100).toFixed(1)}% ABOVE ${asset} spot (${spot}) — your bid would buy collateral above market and the borrower's rational strategy is to default. Pass --acknowledge-itm to quote anyway.`);
+        fail(`this market is in the money: strike ${strikeRatio} vs ${pair} spot ${spot!.loanPerCollateral.toFixed(6)} (LTV ${(money.ratio * 100).toFixed(1)}%) — the collateral no longer covers the debt, and the borrower's rational strategy is delivery. Pass --acknowledge-itm to quote anyway.`);
       }
-      if (money === null) console.error("note: spot unavailable — cannot assess floor moneyness for this bid");
+      if (money === null) console.error(`note: ${pair} pair ratio unavailable — cannot assess moneyness for this bid`);
+    } else {
+      console.error("note: no pair ticker for this market's legs — cannot assess moneyness for this bid");
     }
   }
   const maxUnits = parseAmount(need(ctx.values["max-units"] as string | undefined, "max-units"), loanDecimals);
@@ -527,9 +551,9 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     const collDec = coll?.dec ?? (await c.tokenDecimals(m.params.collateralToken));
     let floor = "?";
     try { floor = floorFromStrike(m.params.strike, loanDec, collDec); } catch { /* off-grid */ }
-    const asset = spotAssetFor(coll?.sym);
-    if (asset && !spots.has(asset)) spots.set(asset, await fetchSpotUsd(asset));
-    const spot = asset ? spots.get(asset) ?? null : null;
+    const pair = pairFor(coll?.sym, loan?.sym);
+    if (pair && !spots.has(pair)) spots.set(pair, (await fetchPairRatio(ctx.profile.relayerUrl, pair))?.loanPerCollateral ?? null);
+    const spot = pair ? spots.get(pair) ?? null : null;
     const money = spot !== null && floor !== "?" ? assessMoneyness(floor, spot) : null;
     const state = await c.marketState(m.id);
     const date = new Date(Number(m.params.maturity) * 1000).toISOString().slice(0, 10);
@@ -537,11 +561,11 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     const collSym = coll?.sym ?? m.params.collateralToken.slice(0, 8);
     const flags = [
       m.params.gate === ZERO_ADDRESS ? "" : "[gated]",
-      money === null ? "" : money.itm ? `[ITM ⚠ floor/spot ${money.ratio.toFixed(2)}]` : `[OTM ${money.ratio.toFixed(2)}]`,
+      money === null ? "" : money.itm ? `[ITM ⚠ LTV ${(money.ratio * 100).toFixed(0)}%]` : `[OTM · LTV ${(money.ratio * 100).toFixed(0)}%]`,
     ].filter(Boolean).join(" ");
     rows.push({
       market: m,
-      label: `${collSym}/${loanSym}  floor ${floor}  matures ${date}  active ${formatAmount(state.activeCredit, loanDec)}  repaid ${formatAmount(state.repaidCredit, loanDec)}  ${flags}`,
+      label: `${collSym}/${loanSym}  strike ${floor === "?" ? "?" : fmtStrikeUnit(floor, loanSym, collSym)}  matures ${date}  active ${formatAmount(state.activeCredit, loanDec)}  repaid ${formatAmount(state.repaidCredit, loanDec)}  ${flags}`,
       itm: money?.itm === true,
       loanDec,
       collDec,
@@ -743,11 +767,11 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       markets = await discoverMarketsOnChain(c, { fromBlock });
     }
     const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
-    // Display-only spot for moneyness flags; one fetch per referenced asset, failures degrade to "?".
+    // Display-only pair ratios for moneyness flags; one fetch per pair, failures degrade to "?".
     const spots = new Map<string, number | null>();
     for (const m of markets) {
-      const asset = spotAssetFor(bySymbol.get(m.params.collateralToken.toLowerCase())?.sym);
-      if (asset && !spots.has(asset)) spots.set(asset, await fetchSpotUsd(asset));
+      const pair = pairFor(bySymbol.get(m.params.collateralToken.toLowerCase())?.sym, bySymbol.get(m.params.loanToken.toLowerCase())?.sym);
+      if (pair && !spots.has(pair)) spots.set(pair, (await fetchPairRatio(ctx.profile.relayerUrl, pair))?.loanPerCollateral ?? null);
     }
     const lines: string[] = [];
     const rows = [];
@@ -757,13 +781,13 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       const state = await c.marketState(m.id);
       let floor = "?";
       if (loan && coll) { try { floor = floorFromStrike(m.params.strike, loan.dec, coll.dec); } catch { floor = "(off-grid)"; } }
-      const asset = spotAssetFor(coll?.sym);
-      const spot = asset ? spots.get(asset) ?? null : null;
+      const marketPair = pairFor(coll?.sym, loan?.sym);
+      const spot = marketPair ? spots.get(marketPair) ?? null : null;
       const money = spot !== null && floor !== "?" && floor !== "(off-grid)" ? assessMoneyness(floor, spot) : null;
-      const moneyLabel = money === null ? "" : money.itm ? `  floor/spot ${money.ratio.toFixed(2)} [ITM ⚠ lending near par is a guaranteed loss]` : `  floor/spot ${money.ratio.toFixed(2)} OTM`;
+      const moneyLabel = money === null ? "" : money.itm ? `  LTV ${(money.ratio * 100).toFixed(0)}% [ITM ⚠ the collateral no longer covers the debt]` : `  LTV ${(money.ratio * 100).toFixed(0)}% OTM`;
       const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
       rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money });
-      lines.push(`${pair}  floor ${floor}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}${moneyLabel}\n    ${m.id}`);
+      lines.push(`${pair}  strike ${floor.startsWith("(") || floor === "?" ? floor : fmtStrikeUnit(floor, loan?.sym ?? "loan", coll?.sym ?? "coll")}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}${moneyLabel}\n    ${m.id}`);
     }
     output(ctx.json, { source, count: markets.length, markets: rows },
       markets.length === 0 ? "no touched markets found in the scanned range" : lines.join("\n"));
@@ -779,6 +803,88 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { marketId: id, params, onchainVerified: true }, `market id: ${id} (on-chain verified)`);
   },
 
+  // --- MaturitySettler: last-window Dutch settlement. Arming is the borrower's two signatures; the floor is
+  // both their protection and the keeper's budget, so `status` prints the settleable bound beside it. ---
+  "settle arm": async (ctx) => {
+    const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
+    const market = await resolveMarket(ctx);
+    const floor = parseAmount(need(ctx.values.floor as string | undefined, "floor"), market.collateralDecimals);
+    const sc = new SettlerClient(ctx.profile, accountFor(ctx), settler);
+    const me = sc.account;
+    const grant = await sc.grantOf(me);
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (!grantCoversSettler(grant, now)) {
+      const tx = await sc.grantSettler();
+      console.error(`granted CAP_WITHDRAW_COLLATERAL to the settler (one-time, until revoked): ${tx.hash}`);
+    }
+    const tx = await sc.arm(market.params, floor);
+    const id = sc.marketId(market.params);
+    const auth = await sc.authorization(id, me);
+    output(ctx.json, { armed: auth.enabled, floor: formatAmount(auth.minCollateralKept, market.collateralDecimals), tx: tx.hash },
+      `armed: keep >= ${formatAmount(auth.minCollateralKept, market.collateralDecimals)} collateral (${tx.hash})`);
+  },
+  "settle disarm": async (ctx) => {
+    const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
+    const market = await resolveMarket(ctx);
+    const sc = new SettlerClient(ctx.profile, accountFor(ctx), settler);
+    const tx = await sc.disarm(market.params);
+    output(ctx.json, { disarmed: true, tx: tx.hash }, `disarmed (${tx.hash})`);
+  },
+  "settle status": async (ctx) => {
+    const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
+    const market = await resolveMarket(ctx);
+    const sc = new SettlerClient(ctx.profile, undefined, settler);
+    const borrower = getAddress((ctx.values.borrower as string | undefined) ?? fail("--borrower is required (status is a view; no key implies no default account)")) as Address;
+    const id = sc.marketId(market.params);
+    const [auth, position, window] = await Promise.all([
+      sc.authorization(id, borrower), sc.position(id, borrower), sc.settleWindow(),
+    ]);
+    const freed = position.collateral + position.collateralWithdrawable;
+    const cap = await sc.maxAsk(freed, market.params.maturity, auth.minCollateralKept);
+    // The settleable bound needs R; degrade to null when the pair feed cannot answer.
+    const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.collateralToken);
+    const loanInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.loanToken);
+    const pair = pairFor(collInfo?.[0], loanInfo?.[0]);
+    const ratio = pair ? await fetchPairRatio(ctx.profile.relayerUrl, pair) : null;
+    const bound = ratio ? maxSettleableFloor(
+      Number(freed) / 10 ** market.collateralDecimals,
+      Number(position.debt) / 10 ** market.loanDecimals,
+      ratio.loanPerCollateral) : null;
+    const fmtC = (v: bigint) => formatAmount(v, market.collateralDecimals);
+    output(ctx.json, {
+      armed: auth.enabled, floor: fmtC(auth.minCollateralKept), debt: formatAmount(position.debt, market.loanDecimals),
+      collateral: fmtC(position.collateral), withdrawable: fmtC(position.collateralWithdrawable),
+      dutchCapNow: fmtC(cap), settleWindowSeconds: window.toString(),
+      settleableFloorBound: bound === null ? null : bound.toFixed(6),
+    }, [
+      `armed ${auth.enabled} | floor ${fmtC(auth.minCollateralKept)} collateral`,
+      `debt ${formatAmount(position.debt, market.loanDecimals)} | collateral ${fmtC(freed)}`,
+      `dutch cap now ${fmtC(cap)} | window ${window}s before maturity`,
+      bound === null
+        ? "settleable floor bound: unknown (pair ratio unavailable)"
+        : `settleable floor bound ~${bound.toFixed(6)} collateral — a floor above this arms nothing (no keeper can profit)`,
+    ].join("\n"));
+  },
+  "settle execute": async (ctx) => {
+    const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
+    const market = await resolveMarket(ctx);
+    const borrower = getAddress(need(ctx.values.borrower as string | undefined, "borrower")) as Address;
+    const sc = new SettlerClient(ctx.profile, accountFor(ctx), settler);
+    const id = sc.marketId(market.params);
+    const [auth, position] = await Promise.all([sc.authorization(id, borrower), sc.position(id, borrower)]);
+    if (!auth.enabled) fail("borrower has not armed this market");
+    if (position.debt === 0n) fail("no debt to settle");
+    const freed = position.collateral + position.collateralWithdrawable;
+    // Default to the Dutch cap: asking less only helps against rival keepers, who are the mechanism for that.
+    const ask = typeof ctx.values.ask === "string"
+      ? parseAmount(ctx.values.ask, market.collateralDecimals)
+      : await sc.maxAsk(freed, market.params.maturity, auth.minCollateralKept);
+    // The keeper fronts the whole debt: approve exactly it, then settle.
+    await sc.approveExact(market.params.loanToken, settler, position.debt);
+    const tx = await sc.settle(market.params, borrower, ask);
+    output(ctx.json, { settled: true, repaid: formatAmount(position.debt, market.loanDecimals), ask: formatAmount(ask, market.collateralDecimals), tx: tx.hash },
+      `settled: fronted ${formatAmount(position.debt, market.loanDecimals)} loan, ask ${formatAmount(ask, market.collateralDecimals)} collateral (${tx.hash})`);
+  },
   "market state": async (ctx) => {
     const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
     const c = client(ctx, false);

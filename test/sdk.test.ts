@@ -100,17 +100,29 @@ test("verifyTouchedMarket accepts chain-verified ids and rejects lineage mismatc
   assert.throws(() => verifyTouchedMarket("core-v2", domain, id, params), /lineage mismatch/);
 });
 
-test("moneyness guardrail math", async () => {
-  const { assessMoneyness, spotAssetFor } = await import("../src/sdk/spot.ts");
-  // the live case that motivated this: $3000 floor vs $1912 ETH spot
+test("moneyness guardrail: S >= R, one rule for every market shape", async () => {
+  const { assessMoneyness, pairFor, tickerFor } = await import("../src/sdk/spot.ts");
+  // `floorFromStrike` output is always loan-per-collateral — the strike ratio S — and the pair feed answers R
+  // in the same unit, so no market shape needs a reciprocal or a dollar anywhere.
+  // Volatile collateral: $3000 strike vs $1912 ETH — deep ITM, and the ratio IS the LTV (157%).
   const itm = assessMoneyness("3000", 1912.435);
   assert.ok(itm && itm.itm && itm.ratio > 1.5);
-  // healthy OTM: $60000 floor vs $64948 BTC spot
-  const otm = assessMoneyness("60000", 64947.815);
-  assert.ok(otm && !otm.itm && otm.ratio < 1);
+  // Volatile loan (a meme drawn against dollars): S = 5 memes per dollar vs R = 7.43 — 67% LTV, OTM.
+  const meme = assessMoneyness("5", 7.43);
+  assert.ok(meme && !meme.itm && Math.abs(meme.ratio - 0.673) < 0.01);
+  // Both legs volatile (the ratio market): S = 1000 mAI per mNVDA vs R = 1263 — 79% LTV, OTM;
+  // and the pre-calibration 8000 strike is ITM at 633%, exactly what gated it live.
+  const pairOtm = assessMoneyness("1000", 1263);
+  assert.ok(pairOtm && !pairOtm.itm);
+  const pairItm = assessMoneyness("8000", 1263);
+  assert.ok(pairItm && pairItm.itm && Math.abs(pairItm.ratio - 6.334) < 0.01);
   assert.equal(assessMoneyness("0", 100), null);
-  assert.equal(spotAssetFor("WETH"), "ETH");
-  assert.equal(spotAssetFor("vaultBTC"), "BTC");
-  assert.equal(spotAssetFor("GHO"), null);
-  assert.equal(spotAssetFor(undefined), null);
+  // Tickers follow the deployment feed's convention: WETH quotes as ETH, everything else as itself.
+  assert.equal(tickerFor("WETH"), "ETH");
+  assert.equal(tickerFor("vaultBTC"), "BTC");
+  assert.equal(tickerFor("mAI"), "MAI");
+  assert.equal(tickerFor(undefined), null);
+  assert.equal(pairFor("mNVDA", "mAI"), "MNVDA-MAI");
+  assert.equal(pairFor("bUSD", "WETH"), "BUSD-ETH");
+  assert.equal(pairFor(undefined, "mAI"), null);
 });

@@ -57,6 +57,8 @@ export interface DeploymentProfile {
   vaultApp?: VaultAppSection;
   gasFaucet?: Address;
   gasApi?: string;
+  /** MaturitySettler periphery for last-window Dutch settlement; absent = not deployed on this chain. */
+  maturitySettler?: Address;
   coreDeploymentBlock?: number;
 }
 
