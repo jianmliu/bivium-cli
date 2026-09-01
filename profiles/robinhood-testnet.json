@@ -17,7 +17,7 @@
       "mintable": false
     },
     "WETH": {
-      "address": "0x33e4191705c386532ba27cBF171Db86919200B94",
+      "address": "0x5BB172a8D5c763c10ED547Ad37c6896E58BeB201",
       "decimals": 18,
       "mintable": false
     },
@@ -40,5 +40,6 @@
   "coreDeploymentBlock": 108911617,
   "relayerUrl": "https://bivium-robinhood.pages.dev/api",
   "gasApi": "https://bivium-robinhood.pages.dev/api/gas",
-  "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3"
+  "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3",
+  "maturitySettler": "0xD41E8bf7DbA0c3a29EbA3d2c09427ab93DfC9FC4"
 }

@@ -58,6 +58,9 @@ export function loadProfile(path: string): DeploymentProfile {
   if (raw.gasApi !== undefined && (typeof raw.gasApi !== "string" || !/^https?:\/\//.test(raw.gasApi))) {
     throw new Error("profile gasApi must be an http(s) URL");
   }
+  if (raw.maturitySettler !== undefined && (typeof raw.maturitySettler !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.maturitySettler))) {
+    throw new Error("profile maturitySettler must be an address");
+  }
   if (raw.coreDeploymentBlock !== undefined && (typeof raw.coreDeploymentBlock !== "number" || !Number.isInteger(raw.coreDeploymentBlock) || raw.coreDeploymentBlock < 0)) {
     throw new Error("profile coreDeploymentBlock must be a non-negative integer");
   }
@@ -73,6 +76,7 @@ export function loadProfile(path: string): DeploymentProfile {
     vaultApp,
     gasFaucet,
     gasApi: raw.gasApi as string | undefined,
+    maturitySettler: raw.maturitySettler as Address | undefined,
     coreDeploymentBlock: raw.coreDeploymentBlock as number | undefined,
   };
 }
