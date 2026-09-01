@@ -20,8 +20,25 @@
       "address": "0x33e4191705c386532ba27cBF171Db86919200B94",
       "decimals": 18,
       "mintable": false
+    },
+    "mCASHCAT": {
+      "address": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+      "decimals": 18,
+      "mintable": true
+    },
+    "mAI": {
+      "address": "0x9e25b0B85E64c7A2b7508f59f83F9dff3a3A631F",
+      "decimals": 18,
+      "mintable": true
+    },
+    "mNVDA": {
+      "address": "0xb0F5bb3028A46Ab101b29A540E304aE3a5bBE877",
+      "decimals": 18,
+      "mintable": true
     }
   },
   "coreDeploymentBlock": 108911617,
-  "relayerUrl": "https://bivium-robinhood.pages.dev/api"
+  "relayerUrl": "https://bivium-robinhood.pages.dev/api",
+  "gasApi": "https://bivium-robinhood.pages.dev/api/gas",
+  "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3"
 }
