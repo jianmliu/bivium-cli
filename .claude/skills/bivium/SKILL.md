@@ -3,10 +3,13 @@ name: bivium
 description: >
   Operate the Bivium fixed-rate credit protocol from the command line: lend (deposit liquidity and
   quote as a maker), borrow against collateral, trade DCN credit (order book, limit and market
-  orders), repay/reclaim/claim, and mint mock testnet assets. Use this skill whenever the user
-  mentions Bivium, DCN, bivium-cli, resting offers/挂单, borrowing against WETH/WBTC/vaultBTC
-  collateral, lending USDC/GHO into a fixed-rate market, sweeping an order book, or asks to test or
-  operate any Bivium market on Sepolia or a local anvil chain — even if they don't name the CLI.
+  orders), repay/reclaim/claim, arm auto-settle (MaturitySettler: borrow-and-forget floors, keeper
+  settlement), and mint mock testnet assets. Use this skill whenever the user mentions Bivium, DCN,
+  bivium-cli, resting offers/挂单, borrowing against WETH/WBTC/vaultBTC/TSLA/mNVDA collateral,
+  lending into a fixed-rate market, meme markets (mCASHCAT/mAI), ratio or Pairs markets
+  (stock/meme, mAI/mNVDA), auto-settle/arm/武装, sweeping an order book, or asks to test or operate
+  any Bivium market on Robinhood Chain testnet (46630), Sepolia, or a local anvil chain — even if
+  they don't name the CLI.
 ---
 
 # Bivium CLI operations
@@ -43,8 +46,10 @@ Pick the profile by target:
 
 | Profile | Target | Notes |
 |---|---|---|
+| `profiles/anvil-tbv-local.json` | local anvil (chain 31337) | safe playground; needs anvil running with the local deployment |
 | `profiles/sepolia-multiloan-v1.json` | Sepolia multi-loan candidate core | 6-field "core-v1" lineage |
 | `profiles/sepolia-routerv3-v2.json` | Sepolia Router V3 core | domain-bound "core-v2" lineage |
+| `profiles/robinhood-testnet.json` | Robinhood Chain testnet (46630) | core-v2; the most active deployment — 21 markets across three product lines, `maturitySettler` configured |
 
 Derive your own address from the signing key before minting or reading balances — never infer it
 from an account index or the prompt (`cast wallet address --private-key "$BIVIUM_PK"` is acceptable
@@ -64,7 +69,8 @@ npm run cli --silent -- wallet gas --to $ADDR --via-api      # keyless: the rela
 ```
 
 The Sepolia profiles carry the faucet address (`gasFaucet`); drips are 0.01 ETH with a 6h
-per-recipient cooldown, and recipients already holding ≥0.05 ETH are refused. Never commit or
+per-recipient cooldown, and recipients already holding ≥0.05 ETH are refused. Robinhood testnet
+drips are 0.0002 ETH (gas there is ~1.6e-6 ETH/tx; refused above 0.001 ETH held). Never commit or
 share a key file.
 
 Sanity-check connectivity and the profile before doing anything else:
@@ -90,12 +96,19 @@ npm run cli --silent -- market list          # MarketTouched scan from the chain
 Every distinct parameter set (even a floor 100 apart) is a SEPARATE market with its own book and
 its own settlement pool — creating a new one splits liquidity and leaves both sides thinner.
 
-Read the `floor/spot` column before quoting. A floor at/above spot (`[ITM ⚠]`) means the
-borrower's rational strategy is to keep the principal and deliver the collateral — lending near
-par there is a guaranteed loss, and `make-offer --side buy` will refuse unless you pass
-`--acknowledge-itm` (only do that when the user explicitly wants an in-the-money quote and
-understands they are buying collateral above market). Prefer OTM markets (floor below spot);
-spot is a display-only reference and never enters the offer itself.
+Read the `LTV` column before quoting. It is the strike ratio over the pair's spot ratio
+(`S / R`, from the deployment's own `/api/spot?pair=` feed) — one rule for every market shape,
+whichever leg is volatile. `[ITM ⚠]` means `S ≥ R`: the collateral no longer covers the debt, the
+borrower's rational strategy is delivery, and lending there is a guaranteed loss.
+`make-offer --side buy` refuses unless you pass `--acknowledge-itm` (only when the user explicitly
+wants an in-the-money quote and understands what they are buying). Prefer OTM markets (LTV < 100%);
+the ratio is a display-only reference and never enters the offer itself.
+
+Strikes print in the pair's own unit — `400 bUSD/TSLA`, `8000 mAI/mNVDA`,
+`0.005 mNVDA/bUSD (= 200 bUSD per mNVDA)` — because the strike is a ratio between the two legs,
+and a market's three possible shapes (volatile collateral = credit line, volatile loan = options
+line, both volatile = ratio/Pairs line) differ only in which leg carries the price risk. The rules
+and commands are identical across all three; only the reading changes.
 Create a new market identity only when the user explicitly wants terms nothing existing offers,
 and say so when you do. `[gated]` rows have an access-controlled gate; prefer ungated ones unless
 you know you pass the gate. `--source relayer` uses the hosted index instead of scanning; if it
@@ -166,6 +179,31 @@ matches the quote to the atom — if it aborts, read the reason; do not retry bl
 needs the **exact face** in the loan token (principal received is less than face — the difference
 is the interest), and reclaiming collateral is a separate transaction after repay.
 
+## Workflow: auto-settle (到期兜底 / borrow-and-forget)
+
+On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
+collateral goes to the credit holders — which punishes exactly the borrower who judged the market
+right. A borrower can arm the MaturitySettler (profiles with `maturitySettler`; Robinhood testnet
+has it): in the final 6h window a keeper repays for them under a Dutch-auction fee cap, never
+leaving them below a floor they chose.
+
+```bash
+npm run cli --silent -- settle arm ${=B} --floor 0.09        # one-time core grant + per-market arm
+npm run cli --silent -- settle status ${=B} --borrower <addr>
+npm run cli --silent -- settle disarm ${=B}
+# keeper-side (fund the repay yourself, take the Dutch cap unless --ask):
+npm run cli --silent -- settle execute ${=B} --borrower <addr>
+```
+
+The floor is BOTH the borrower's protection and the keeper's budget: settlement is reachable only
+while `floor < collateral − debt/R`. `settle status` prints that bound — **a floor above it arms
+nothing** (no keeper can ever profit), so always read the bound before choosing a floor, and treat
+"settleable floor bound ~0" as the position being underwater: walking away is then the rational
+branch and arming cannot help. Delivery is a legitimate election — a borrower who WANTS to be
+assigned simply never arms. `settle execute` fronts the whole debt from the caller's wallet
+(keeper profit = ask×R − debt); it approves exactly the debt and defaults the ask to the current
+Dutch cap.
+
 ## Workflow: trade DCN (交易挂单)
 
 ```bash
@@ -213,6 +251,5 @@ npm run cli --silent -- order cancel --offer ask.json
 
 Deep reference: `README.md` and `docs/spec/2026-08-09-bivium-cli-spec.md` in the bivium-cli repo;
 protocol docs in `/Volumes/T7-Data/bendle/bivium-docs/` (`cli.md`, `protocol-overview.md`,
-`using-the-app.md`). The `vault` command group drives the whole-lot vault app (vaultBTC / TBVBTC:
-mock vault faucet, borrow against whole vaults, convert/unconvert, redemption book, keeper settle)
-on the Sepolia core-v2 profile — read the README's "Whole-lot vault app" section before using it.
+`using-the-app.md`). An experimental `tbv` command group (whole-vault ERC-1155 collateral) exists
+for local anvil work — read the spec's TBV section before using it.
