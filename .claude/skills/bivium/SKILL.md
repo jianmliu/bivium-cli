@@ -338,6 +338,9 @@ npm run cli --silent -- settle execute ${=B} --borrower <addr>
 # zero-capital keeper (profiles with v4JitKeeper): a Uniswap v4 pool funds the repay, surplus to your wallet,
 # unprofitable settles revert whole — needs a live v4 pool holding the market's two legs:
 npm run cli --silent -- settle execute ${=B} --borrower <addr> --via-jit --min-profit 0.5
+# Same settle, funded by a Morpho Blue flash loan and only converted on the v4 pool — for loan legs whose depth is
+# in Morpho rather than in the pool (on testnet: a flash-capable MockMorpho). Same flags, same fail-closed rule.
+npm run cli --silent -- settle execute ${=B} --borrower <addr> --via-morpho --min-profit 0.5
 ```
 
 The floor is a SHARE — `--keep <percent>` of the collateral a settlement unlocks that must come back

@@ -42,5 +42,6 @@
   "gasApi": "https://bivium-robinhood.pages.dev/api/gas",
   "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3",
   "maturitySettler": "0xED91b873E58472380D9df46cEAf7060C707B707D",
-  "v4JitKeeper": "0x2ac71B3673220192E3923843A19F9CAc995063E9"
+  "v4JitKeeper": "0x2ac71B3673220192E3923843A19F9CAc995063E9",
+  "morphoJitFunder": "0x95642156F268FaEE282f2268932A858792A0Dd78"
 }

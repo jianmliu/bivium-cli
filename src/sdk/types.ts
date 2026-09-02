@@ -60,6 +60,8 @@ export interface DeploymentProfile {
   /** MaturitySettler periphery for last-window Dutch settlement; absent = not deployed on this chain. */
   maturitySettler?: Address;
   v4JitKeeper?: Address;
+  /** MorphoJitFunder: the same zero-capital settle, funded by a Morpho Blue flash loan and converted on v4. */
+  morphoJitFunder?: Address;
   coreDeploymentBlock?: number;
 }
 
