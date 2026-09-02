@@ -1,4 +1,5 @@
 node_modules/
+.worktrees/
 *.tsbuildinfo
 .env*
 !.env.example
