@@ -50,5 +50,13 @@ test("the distributable skill and the repo-local skill are the same file", () =>
   for (const document of [dist, readme]) {
     assert.doesNotMatch(document, /0x<[^>]+>/i, "examples must use valid hex rather than shell metacharacter placeholders");
     assert.doesNotMatch(document, /(?:Bivium\s+)?Core\s+(?:approves|allowlists|pauses)\b/i);
+    assert.match(document, /wallet create --out agent\.key/i);
+    assert.match(document, /wallet address --key-file agent\.key/i);
+    assert.match(document, /KEY_FILE='agent\.key'/);
+    assert.match(document, /borrow execute[^\n]*--key-file "\$KEY_FILE"/i);
+    assert.match(document, /repay --offer[^\n]*--key-file "\$KEY_FILE"/i);
+    assert.match(document, /reclaim --offer[^\n]*--key-file "\$KEY_FILE"/i);
+    assert.match(document, /claim[^\n]*--key-file "\$KEY_FILE"/i);
+    assert.doesNotMatch(document, /--private-key\b/i, "public instructions must never put a private key in CLI arguments");
   }
 });

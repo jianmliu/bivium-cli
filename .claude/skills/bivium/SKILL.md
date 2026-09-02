@@ -122,6 +122,10 @@ Discover first, then copy one existing market's exact values into the quoted she
 
 ```bash
 export BIVIUM_PROFILE='profiles/robinhood-testnet.json'
+npm run cli --silent -- wallet create --out agent.key
+npm run cli --silent -- wallet address --key-file agent.key
+
+KEY_FILE='agent.key'
 npm run cli --silent -- market list --json
 
 LOAN='bUSD'
@@ -144,15 +148,20 @@ corresponding write. The JSON strategy commands above do not authorize or execut
 
 ```bash
 # Only after explicit user confirmation and signature:
-npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --json
+npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --key-file "$KEY_FILE" --json
 
 # Strictly before maturity; reclaim is a separate signed transaction:
-npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --json
-npm run cli --silent -- reclaim --offer "$OFFER_FILE" --json
+npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --key-file "$KEY_FILE" --json
+npm run cli --silent -- reclaim --offer "$OFFER_FILE" --key-file "$KEY_FILE" --json
 
 # At/after maturity, claim the settlement asset or asset mix:
-npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --json
+npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$KEY_FILE" --json
 ```
+
+`wallet create` writes `agent.key` with file mode `0600`. The same signer owns the resulting
+position and must be retained until the position is repaid and reclaimed or its settlement is
+claimed. Keep the file in durable private storage for any position spanning sessions; never commit,
+share, print, or echo it, and never put a raw key in CLI arguments or echo a key environment variable.
 
 ## Operational safety
 
@@ -164,8 +173,8 @@ npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --json
   the difference is interest. Reclaiming collateral is a separate transaction.
 - At or after maturity, an unpaid position delivers collateral into settlement. Claims may return
   loan tokens, collateral, or a mix.
-- A borrow position is bound to its wallet. Preserve access through repayment or maturity; never
-  commit or share key files.
+- A borrow position is bound to its signer. Every write above uses the same `--key-file`; do not
+  substitute another account during execute, repay, reclaim, or claim.
 - A stopped agent action does not pause a permissionless market. Report whether the stop came from
   Core state, Bivium infrastructure, an optional provider, or the selected policy.
 

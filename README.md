@@ -105,6 +105,10 @@ Discover an existing market, then copy its exact fields into the quoted variable
 
 ```bash
 export BIVIUM_PROFILE='profiles/robinhood-testnet.json'
+npm run cli --silent -- wallet create --out agent.key
+npm run cli --silent -- wallet address --key-file agent.key
+
+KEY_FILE='agent.key'
 npm run cli --silent -- market list --json
 
 LOAN='bUSD'; COLLATERAL='mAI'; MATURITY='1788828951'; FLOOR='8000'
@@ -120,11 +124,17 @@ npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
 Show the preview, re-check the domain and bounds, and obtain the user's signature for each write:
 
 ```bash
-npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --json
-npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --json
-npm run cli --silent -- reclaim --offer "$OFFER_FILE" --json
-npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --json
+npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --key-file "$KEY_FILE" --json
+npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --key-file "$KEY_FILE" --json
+npm run cli --silent -- reclaim --offer "$OFFER_FILE" --key-file "$KEY_FILE" --json
+npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$KEY_FILE" --json
 ```
+
+`wallet create` writes the key file with mode `0600`. The same signer owns the position and must be
+retained until it is repaid and reclaimed or settlement is claimed. Store `agent.key` durably and
+privately for positions spanning sessions. Never commit, share, print, or echo it; never supply a
+raw key as a CLI argument or echo a key environment variable. Read-only discovery, catalog,
+assessment, attribution, book, quote, and dry-run commands need no signer.
 
 ## Development
 
