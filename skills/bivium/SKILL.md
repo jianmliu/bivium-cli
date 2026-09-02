@@ -144,7 +144,9 @@ npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
 ```
 
 Show the resulting quote or dry-run and obtain the user's per-transaction signature before the
-corresponding write. The JSON strategy commands above do not authorize or execute these writes:
+corresponding write. The borrower signer is used for `borrow execute`, `repay`, and `reclaim` and
+must be retained until the borrower position is closed. The JSON strategy commands above do not
+authorize or execute these writes:
 
 ```bash
 # Only after explicit user confirmation and signature:
@@ -153,15 +155,23 @@ npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --
 # Strictly before maturity; reclaim is a separate signed transaction:
 npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --key-file "$KEY_FILE" --json
 npm run cli --silent -- reclaim --offer "$OFFER_FILE" --key-file "$KEY_FILE" --json
-
-# At/after maturity, claim the settlement asset or asset mix:
-npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$KEY_FILE" --json
 ```
 
 `wallet create` writes `agent.key` with file mode `0600`. The same signer owns the resulting
-position and must be retained until the position is repaid and reclaimed or its settlement is
-claimed. Keep the file in durable private storage for any position spanning sessions; never commit,
-share, print, or echo it, and never put a raw key in CLI arguments or echo a key environment variable.
+borrower position and must be retained until it is repaid and reclaimed. Keep the file in durable
+private storage for any position spanning sessions; never commit, share, print, or echo it, and
+never put a raw key in CLI arguments or echo a key environment variable.
+
+### Credit-holder settlement claim
+
+Claim is not the next step in the borrower lifecycle. At or after maturity, only the current DCN
+credit holder—the original lender or a secondary buyer—claims with that holder's signer. Use the
+key file for the account that currently owns the DCN, not the borrower key shown above:
+
+```bash
+HOLDER_KEY_FILE='holder.key'
+npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$HOLDER_KEY_FILE" --json
+```
 
 ## Operational safety
 
@@ -173,8 +183,8 @@ share, print, or echo it, and never put a raw key in CLI arguments or echo a key
   the difference is interest. Reclaiming collateral is a separate transaction.
 - At or after maturity, an unpaid position delivers collateral into settlement. Claims may return
   loan tokens, collateral, or a mix.
-- A borrow position is bound to its signer. Every write above uses the same `--key-file`; do not
-  substitute another account during execute, repay, reclaim, or claim.
+- A borrow position is bound to its signer. Use the same borrower `--key-file` for execute, repay,
+  and reclaim. Use the current DCN holder's separate signer for claim.
 - A stopped agent action does not pause a permissionless market. Report whether the stop came from
   Core state, Bivium infrastructure, an optional provider, or the selected policy.
 

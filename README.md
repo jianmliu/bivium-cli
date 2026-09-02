@@ -121,20 +121,31 @@ npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
   --source relayer --dry-run --json
 ```
 
-Show the preview, re-check the domain and bounds, and obtain the user's signature for each write:
+Show the preview, re-check the domain and bounds, and obtain the user's signature for each write.
+The borrower signer is used for `borrow execute`, `repay`, and `reclaim` and must be retained until
+the borrower position is closed:
 
 ```bash
 npm run cli --silent -- borrow execute --offer "$OFFER_FILE" --units "$UNITS" --key-file "$KEY_FILE" --json
 npm run cli --silent -- repay --offer "$OFFER_FILE" --assets "$FACE" --key-file "$KEY_FILE" --json
 npm run cli --silent -- reclaim --offer "$OFFER_FILE" --key-file "$KEY_FILE" --json
-npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$KEY_FILE" --json
 ```
 
 `wallet create` writes the key file with mode `0600`. The same signer owns the position and must be
-retained until it is repaid and reclaimed or settlement is claimed. Store `agent.key` durably and
-privately for positions spanning sessions. Never commit, share, print, or echo it; never supply a
-raw key as a CLI argument or echo a key environment variable. Read-only discovery, catalog,
-assessment, attribution, book, quote, and dry-run commands need no signer.
+retained until it is repaid and reclaimed. Store `agent.key` durably and privately for positions
+spanning sessions. Never commit, share, print, or echo it; never supply a raw key as a CLI argument
+or echo a key environment variable. Read-only discovery, catalog, assessment, attribution, book,
+quote, and dry-run commands need no signer.
+
+### Credit-holder settlement claim
+
+Claim is separate from the borrower lifecycle. At or after maturity, only the current DCN credit
+holder—the original lender or a secondary buyer—claims using that holder's signer/key file:
+
+```bash
+HOLDER_KEY_FILE='holder.key'
+npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$HOLDER_KEY_FILE" --json
+```
 
 ## Development
 

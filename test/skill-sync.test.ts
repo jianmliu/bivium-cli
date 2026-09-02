@@ -56,7 +56,11 @@ test("the distributable skill and the repo-local skill are the same file", () =>
     assert.match(document, /borrow execute[^\n]*--key-file "\$KEY_FILE"/i);
     assert.match(document, /repay --offer[^\n]*--key-file "\$KEY_FILE"/i);
     assert.match(document, /reclaim --offer[^\n]*--key-file "\$KEY_FILE"/i);
-    assert.match(document, /claim[^\n]*--key-file "\$KEY_FILE"/i);
+    assert.match(document, /borrower signer[^.]*borrow execute[^.]*repay[^.]*reclaim/i);
+    assert.match(document, /current DCN\s+credit\s+holder[^.]*lender[^.]*secondary buyer/i);
+    assert.match(document, /HOLDER_KEY_FILE='holder\.key'/);
+    assert.match(document, /\bclaim\b[^\n]*--key-file "\$HOLDER_KEY_FILE"/i);
+    assert.doesNotMatch(document, /\bclaim\b[^\n]*--key-file "\$KEY_FILE"/i);
     assert.doesNotMatch(document, /--private-key\b/i, "public instructions must never put a private key in CLI arguments");
   }
 });
