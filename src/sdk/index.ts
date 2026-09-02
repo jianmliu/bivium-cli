@@ -15,3 +15,4 @@ export * from "./vaultApp.ts";
 export * from "./wallet.ts";
 export * from "./discovery.ts";
 export * from "./spot.ts";
+export * from "./strategies/index.ts";
