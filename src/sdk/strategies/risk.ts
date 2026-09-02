@@ -52,7 +52,21 @@ const booleanKeys = new Set<MarketRiskEvidenceKey>([
 function validValue(key: MarketRiskEvidenceKey, value: unknown): boolean {
   if (booleanKeys.has(key)) return typeof value === "boolean";
   if (typeof value !== "number" || !Number.isFinite(value)) return false;
-  return key !== "referencePrice" || value > 0;
+  if (key === "top10HolderPct") return value >= 0 && value <= 100;
+  if (key === "exitSlippageBps") return value >= 0;
+  return value > 0;
+}
+
+function validatePolicy(policy: AgentRiskPolicy): void {
+  const concentration = policy.maxTop10HolderPct;
+  if (concentration !== undefined
+      && (!Number.isFinite(concentration) || concentration < 0 || concentration > 100)) {
+    throw new Error("invalid risk policy: maxTop10HolderPct must be finite and between 0 and 100");
+  }
+  const slippage = policy.maxExitSlippageBps;
+  if (slippage !== undefined && (!Number.isFinite(slippage) || slippage < 0)) {
+    throw new Error("invalid risk policy: maxExitSlippageBps must be finite and non-negative");
+  }
 }
 
 /**
@@ -64,6 +78,7 @@ export function assessRisk(
   selectedPolicy: SelectedRiskPolicy = DEFAULT_POLICY_SELECTION,
 ): MarketRiskReport {
   const policy = selectedPolicy.rules;
+  validatePolicy(policy);
   let malformedEvidence = false;
   const evidence = Object.fromEntries(evidenceKeys.map((key) => {
     const datum = input.evidence[key];

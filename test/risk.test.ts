@@ -120,6 +120,48 @@ test("malformed evidence cannot be accepted by disabling ordinary unknown confir
   assert.ok(report.unknowns.includes("mintable"));
 });
 
+test("out-of-domain numeric evidence is unknown and cannot pass", () => {
+  const invalid: Array<[string, number]> = [
+    ["top10HolderPct", -1],
+    ["top10HolderPct", 101],
+    ["exitSlippageBps", -1],
+    ["referencePrice", 0],
+    ["referencePrice", -1],
+  ];
+
+  for (const [key, value] of invalid) {
+    const input = benign();
+    (input.evidence as Record<string, unknown>)[key] = observed(value);
+    const report = assessRisk(input);
+    assert.notEqual(report.decision, "accept", `${key}=${value} must not pass`);
+    assert.ok(report.unknowns.includes(key));
+  }
+});
+
+test("invalid policy thresholds are rejected explicitly", () => {
+  const invalid: Array<["maxTop10HolderPct" | "maxExitSlippageBps", number]> = [
+    ["maxTop10HolderPct", -1],
+    ["maxTop10HolderPct", 101],
+    ["maxTop10HolderPct", Number.NaN],
+    ["maxTop10HolderPct", Number.POSITIVE_INFINITY],
+    ["maxExitSlippageBps", -1],
+    ["maxExitSlippageBps", Number.NaN],
+    ["maxExitSlippageBps", Number.POSITIVE_INFINITY],
+  ];
+
+  for (const [key, value] of invalid) {
+    assert.throws(() => assessRisk(benign(), {
+      source: "user-policy",
+      rules: {
+        rejectArbitraryMint: true,
+        rejectUnsellable: true,
+        confirmOnUnknown: true,
+        [key]: value,
+      },
+    }), /invalid risk policy/i, `${key}=${String(value)} must throw`);
+  }
+});
+
 test("a reject condition wins over unknown evidence deterministically", () => {
   const input = benign();
   input.evidence.sellability = observed(false, "venue check", at);
