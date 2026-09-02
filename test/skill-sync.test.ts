@@ -77,6 +77,12 @@ test("the distributable skill and the repo-local skill are the same file", () =>
     /strategy catalog --json/i,
     /strategy assess/i,
     /strategy trace/i,
+    /strategy list --json/i,
+    /strategy quote --strategy/i,
+    /strategy plan --strategy/i,
+    /bivium-mcp/i,
+    /strategy_list[^]*market_list[^]*strategy_quote[^]*strategy_plan/i,
+    /MCP server has no transaction execution or signing tool/i,
   ]) {
     assert.match(readme, retainedReference, `README must retain ${retainedReference}`);
   }

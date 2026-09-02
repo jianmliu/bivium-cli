@@ -22,9 +22,10 @@ export BIVIUM_PROFILE=profiles/robinhood-testnet.json
 Run locally with `npm run cli -- ...` or use `./bivium-run`, which selects the local or Docker
 runtime. Never put a private key in command arguments or logs.
 
-## Agent JSON interface
+## Strategy CLI
 
-The stable agent-facing surface consists of three commands, all requiring `--json`:
+The strategy surface has six read-only commands. `catalog`, `assess`, and `trace` require
+`--json`; `list`, `quote`, and `plan` support either human-readable output or `--json`:
 
 ```bash
 # Product catalog and aliases
@@ -41,13 +42,52 @@ npm run cli --silent -- strategy trace \
   --nonce 0 \
   --account 0x1111111111111111111111111111111111111111 \
   --json
+
+# Full strategy toolbox catalog
+npm run cli --silent -- strategy list --json
+
+# Resolve an existing market and show the five confirm-screen numbers
+npm run cli --silent -- strategy quote --strategy lendQuote --asset mNVDA --counter bUSD \
+  --size 1000 --maturity 1789113600 --buffer 20 --apr-bps 1500 --json
+
+# Build a bounded intent/router/sequential plan; nothing is submitted
+npm run cli --silent -- strategy plan --strategy lendQuote --asset mNVDA --counter bUSD \
+  --size 1000 --maturity 1789113600 --buffer 20 --apr-bps 1500 --json
 ```
 
 `catalog` exposes the initial `lendAsset`, `lendQuote`, and `short` products and their aliases.
 `assess` reports facts, warnings, unknowns, `MEME_DELIVERY_RISK` where applicable, stress outcomes,
 and an `agent-policy` decision from `DEFAULT_AGENT_POLICY`. `trace` binds `strategyId` and `quoteId`
-to the selected profile's chain and Core plus the user's account and nonce. None of these three JSON
-commands signs or executes a transaction.
+to the selected profile's chain and Core plus the user's account and nonce. `list` exposes the
+complete toolbox, including declared multi-leg strategies that are not yet quotable as one unit.
+`quote` resolves an existing market and reports prepay, premium, worst case and its form,
+break-even, exercise probability, and a maturity payoff table. `plan` adds explicit maximum-loss,
+minimum-output, and deadline bounds and labels the result `intent`, `router`, or non-atomic
+`sequential`. None of the six commands signs or executes a transaction. A plan is a preview, not
+authorization; execution still uses the existing write commands and a fresh user approval and
+signature per transaction on Robinhood Chain testnet `46630` only.
+
+### Read-only MCP twin
+
+`bivium-mcp` exposes the shared strategy engine over MCP stdio for clients that prefer tool calls:
+
+```json
+{
+  "mcpServers": {
+    "bivium-strategies": {
+      "command": "npx",
+      "args": ["--prefix", "/path/to/bivium-cli", "bivium-mcp"],
+      "env": { "BIVIUM_PROFILE": "/path/to/bivium-cli/profiles/robinhood-testnet.json" }
+    }
+  }
+}
+```
+
+Its tools are `strategy_list`, `market_list`, `strategy_quote`, and `strategy_plan`. They list,
+discover, quote, and plan only; tool failures are returned as errors rather than being treated as
+empty market data. The MCP server has no transaction execution or signing tool. Robinhood Chain
+mainnet `4663` remains identity/reference-only: neither the CLI strategy surface nor this MCP
+surface implies permission to construct, sign, submit, or execute a mainnet write.
 
 ## Required execution sequence
 
