@@ -201,3 +201,28 @@ test("quote + plan: the confirm-screen numbers and a bounded plan whose maxLoss 
   const lendQ = quoteStrategy({ resolution: lendRes, priceWad: P, spot: S0, now: NOW }, N);
   assert.equal(buildPlan(lendRes, lendQ, { now: NOW, core }).mode, "intent");
 });
+
+test("P(exercise) is measured at the strategy's own boundary, not at K", () => {
+  // Levered long on mNVDA: hold 10, K = 160 below spot 170, max borrow → the delivery point is
+  // face ÷ total collateral ≈ 82.7, far below K. The reported probability must reflect THAT.
+  const mNVDA = "0x0000000000000000000000000000000000000f01" as Address;
+  const K160 = strikeFromFloor("160", 6, 18); // 160 bUSD per mNVDA (credit line: loan bUSD, collateral mNVDA)
+  const market: DiscoveredMarket = {
+    id: "0x02",
+    params: { loanToken: bUSD, collateralToken: mNVDA, maturity: 1_800_000_000n, strike: K160, allowPartialRepay: true, gate: "0x0000000000000000000000000000000000000000" },
+    firstSeenBlock: 0n,
+  };
+  const rows: PoolRow[] = [{ market, loanSymbol: "bUSD", collateralSymbol: "mNVDA", loanDecimals: 6, collateralDecimals: 18 }];
+  const spot = 170n * WAD;
+  const res = resolveStrategy({ strategyId: "leveredLong", asset: mNVDA, size: 0n, maturity: 1_800_000_000n, bufferPct: -6 }, rows, spot);
+  const now = 1_800_000_000n - 22n * 86_400n;
+  const q = quoteStrategy({ resolution: res, priceWad: 992_576_000_000_000_000n, spot, sigmaAnnual: 0.6, now }, 10n * WAD);
+  assert.ok(q.payoff.boundary < 90n * WAD && q.payoff.boundary > 80n * WAD);
+  // At K the odds would be ~34%; at the real delivery point (a −51% move over 22d at σ=60%) they are ≈0.
+  const atK = exerciseProbability(res.realizedBufferPct, 0.6, 22)!;
+  assert.ok(atK > 0.3);
+  assert.ok(q.exerciseProbability! < 0.01);
+  // The short's boundary IS K, so its number is unchanged (the design note's 34%).
+  const short = quoteStrategy({ resolution: resolveStrategy({ strategyId: "short", asset: mAI, size: 0n, maturity: MATURITY, bufferPct: 48 }, [row(K20)], S0), priceWad: P, spot: S0, sigmaAnnual: 7.11, now: MATURITY - 7n * 86_400n }, N);
+  assert.ok(short.exerciseProbability! > 0.33 && short.exerciseProbability! < 0.36);
+});

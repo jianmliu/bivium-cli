@@ -9,22 +9,30 @@ import {
   leveredLongPayoff,
   protectivePutPayoff,
 } from "./payoff.ts";
-import { exerciseProbability } from "./probability.ts";
+import { exerciseProbabilityAt } from "./probability.ts";
 import type { QuoteInputs, StrategyQuote } from "./types.ts";
 
 const DAY = 86_400n;
 
 export function quoteStrategy(q: QuoteInputs, size: bigint): StrategyQuote {
+  const partial = quoteWithoutProbability(q, size);
+  const r = q.resolution;
+  const days = Number((r.row.market.params.maturity - q.now) * 1000n / DAY) / 1000;
+  // Measured at the strategy's own exercise boundary, not at K: a levered long delivers at
+  // face ÷ total collateral, so "P(S_T < K)" would overstate the odds of losing the stake.
+  const exerciseProbability =
+    q.sigmaAnnual === undefined ? null : exerciseProbabilityAt(q.spot, partial.payoff.boundary, r.strategy.otmDirection, q.sigmaAnnual, days);
+  return { ...partial, exerciseProbability };
+}
+
+function quoteWithoutProbability(q: QuoteInputs, size: bigint): Omit<StrategyQuote, "exerciseProbability"> {
   const r = q.resolution;
   const dec = { assetDecimals: r.assetDecimals, numeraireDecimals: r.numeraireDecimals };
-  const days = Number((r.row.market.params.maturity - q.now) * 1000n / DAY) / 1000;
-  const probability = q.sigmaAnnual === undefined ? null : exerciseProbability(r.realizedBufferPct, q.sigmaAnnual, days);
   const base = {
     strategyId: r.strategy.id,
     marketId: computeMarketId(r.row.market.params),
     maturity: r.row.market.params.maturity,
     side: r.side,
-    exerciseProbability: probability,
     asset: r.asset,
     numeraire: r.numeraire,
     estimateBasis: "spot" as const,
