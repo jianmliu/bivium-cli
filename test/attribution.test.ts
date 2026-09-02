@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { encodeAbiParameters, keccak256 } from "viem";
-import { startTrace, withFill, withOrder } from "../src/sdk/strategies/index.ts";
+import {
+  startTrace,
+  withFill,
+  withOrder,
+  type StrategyTrace,
+} from "../src/sdk/strategies/index.ts";
 
 const CORE = "0x1111111111111111111111111111111111111111" as const;
 const ACCOUNT = "0x2222222222222222222222222222222222222222" as const;
@@ -92,4 +97,37 @@ test("trace builders reject invalid execution identifiers", () => {
   assert.throws(() => withOrder(intent, "0x1234" as never), /orderId.*bytes32/i);
   const ordered = withOrder(intent, ORDER);
   assert.throws(() => withFill(ordered, "0x1234" as never), /fillId.*bytes32/i);
+});
+
+test("builders reject forged malformed trace fields instead of carrying them forward", () => {
+  const intent = startTrace(input);
+  const malformed: Array<[keyof StrategyTrace, unknown, RegExp]> = [
+    ["account", "0x1234", /account.*address/i],
+    ["strategyId", "", /strategyId.*nonempty/i],
+    ["quoteId", "0x1234", /quoteId.*bytes32/i],
+    ["intentId", "0x1234", /intentId.*bytes32/i],
+  ];
+
+  for (const [key, value, error] of malformed) {
+    const forged = { ...intent, [key]: value } as StrategyTrace;
+    assert.throws(() => withOrder(forged, ORDER), error);
+    assert.throws(() => withFill({ ...forged, orderId: ORDER }, FILL), error);
+  }
+
+  const invalidOrder = { ...intent, orderId: "0x1234" } as StrategyTrace;
+  assert.throws(() => withOrder(invalidOrder, ORDER), /orderId.*bytes32/i);
+  assert.throws(() => withFill(invalidOrder, FILL), /orderId.*bytes32/i);
+  const invalidFill = { ...intent, orderId: ORDER, fillId: "0x1234" } as StrategyTrace;
+  assert.throws(() => withOrder(invalidFill, ORDER), /fillId.*bytes32/i);
+  assert.throws(() => withFill(invalidFill, FILL), /fillId.*bytes32/i);
+});
+
+test("builders enforce order-before-fill even for forged traces", () => {
+  const intent = startTrace(input);
+  const forgedFill = { ...intent, fillId: FILL };
+
+  assert.throws(() => withOrder(forgedFill, ORDER), /fillId.*before orderId/i);
+  assert.throws(() => withFill(forgedFill, FILL), /orderId is required/i);
+  const filled = withFill(withOrder(intent, ORDER), FILL);
+  assert.throws(() => withFill(filled, `0x${"66".repeat(32)}`), /fillId is already set/i);
 });
