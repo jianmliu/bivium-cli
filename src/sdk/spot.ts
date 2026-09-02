@@ -34,25 +34,29 @@ export interface PairRatio {
   /** Loan tokens per whole collateral at spot — the strike's unit. */
   loanPerCollateral: number;
   status: "ready" | "stale";
+  /** Annualised realised volatility (e.g. 7.11 = 711%) when the feed serves `stat=sigma21d`; absent otherwise. */
+  sigma21d?: number;
   /** Legs the feed took at a declared unit of account instead of a live price. */
   assumed: { symbol: string; unit: string }[];
 }
 
 /** The deployment's pair feed; null on any failure — callers degrade to "moneyness unknown". */
-export async function fetchPairRatio(relayerUrl: string | undefined, pair: string): Promise<PairRatio | null> {
+export async function fetchPairRatio(relayerUrl: string | undefined, pair: string, options: { stat?: string } = {}): Promise<PairRatio | null> {
   if (!relayerUrl) return null;
   try {
-    const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/spot?pair=${encodeURIComponent(pair)}`, {
+    const stat = options.stat ? `&stat=${encodeURIComponent(options.stat)}` : "";
+    const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/spot?pair=${encodeURIComponent(pair)}${stat}`, {
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { loanPerCollateral?: unknown; status?: unknown; assumed?: unknown };
+    const body = (await res.json()) as { loanPerCollateral?: unknown; status?: unknown; assumed?: unknown; sigma21d?: unknown };
     if (typeof body.loanPerCollateral !== "number" || !Number.isFinite(body.loanPerCollateral) || body.loanPerCollateral <= 0) return null;
     if (body.status !== "ready" && body.status !== "stale") return null;
     return {
       loanPerCollateral: body.loanPerCollateral,
       status: body.status,
       assumed: Array.isArray(body.assumed) ? (body.assumed as PairRatio["assumed"]) : [],
+      ...(typeof body.sigma21d === "number" && Number.isFinite(body.sigma21d) && body.sigma21d > 0 ? { sigma21d: body.sigma21d } : {}),
     };
   } catch {
     return null;

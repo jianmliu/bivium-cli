@@ -215,6 +215,23 @@ npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000
 - Combos (`straddle`, `shortVol`, `collar`, `spread`) are listed but not quotable as one unit until
   the Router lands — quote each leg separately.
 
+### The MCP twin (`bivium-mcp`)
+
+The same engine is exposed as MCP tools over stdio for agents that prefer tool calls to shelling
+out — READ-ONLY by design (list, discover, quote, plan); execution stays with the CLI under the
+user's key. Register it in the client's MCP config:
+
+```json
+{ "mcpServers": { "bivium-strategies": { "command": "npx", "args": ["--prefix", "<bivium-cli>", "bivium-mcp"],
+                                          "env": { "BIVIUM_PROFILE": "<bivium-cli>/profiles/robinhood-testnet.json" } } } }
+```
+
+Tools: `strategy_list` (the catalog — read it first), `market_list` (pick a maturity; join existing
+markets), `strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),
+`strategy_plan` (mode + steps + hard limits; never executes). Arguments mirror the CLI flags
+(`strategy, asset, size, maturity, bufferPct, aprBps | priceWad, sigma`). Tool failures come back as
+`isError` results whose text says what to change (e.g. "pass aprBps or priceWad").
+
 ## Workflow: auto-settle (到期兜底 / borrow-and-forget)
 
 On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the

@@ -64,18 +64,12 @@ import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor
 import {
   STRATEGIES,
   catalogJson,
-  getStrategy,
-  classifyLine,
-  orientation,
-  resolveStrategy,
-  quoteStrategy,
-  buildPlan,
-  type Line,
+  gatherStrategyInputs,
+  gatheredToJson,
+  planFromGathered,
+  prepayIsAsset,
+  type GatheredStrategy,
   type Plan,
-  type PoolRow,
-  type PxWad,
-  type StrategyQuote,
-  type StrategyResolution,
 } from "../sdk/index.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
@@ -102,7 +96,7 @@ usage: bivium <command> [options]
   borrow execute --offer <file> --units <human> [--receiver <addr>]
   strategy list                                            # the strategy catalog (what GET /api/strategies serves)
   strategy quote --strategy <id> --asset <symbol|addr> [--counter <symbol|addr>] --size <human> --maturity <unix> --buffer <pct>
-                 [--apr-bps <n> | --price <wad> | (--source relayer)] [--sigma <annual vol>] [--source chain --from-block N]
+                 [--apr-bps <n> | --price <wad> | (--source relayer)] [--sigma <annual vol>] [--source chain --from-block N --chunk-blocks N]
   strategy plan  (same flags) [--router <addr>] [--min-out <human>] [--ttl <s>]   # bounded plan: maxLoss/minOut/deadline; never executes
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
@@ -204,6 +198,7 @@ const OPTIONS = {
   price: { type: "string" },
   router: { type: "string" },
   "min-out": { type: "string" },
+  "chunk-blocks": { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -1287,26 +1282,18 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "strategy quote": async (ctx) => {
     const g = await gatherStrategy(ctx);
-    output(ctx.json, strategyJson(g), renderStrategyQuote(ctx, g));
+    output(ctx.json, gatheredToJson(g), renderStrategyQuote(ctx, g));
   },
 
   "strategy plan": async (ctx) => {
     const g = await gatherStrategy(ctx);
     const v = ctx.values;
-    const router = typeof v.router === "string" ? (getAddress(v.router) as Address) : undefined;
-    const needsSwap = g.res.strategy.requires.includes("swap");
-    const minOut = typeof v["min-out"] === "string"
-      ? parseAmount(v["min-out"], g.res.strategy.id === "leveredLong" ? g.res.assetDecimals : g.res.numeraireDecimals)
-      : undefined;
-    if (needsSwap && minOut === undefined) fail("this strategy has a swap leg: pass --min-out <human> (the swap's floor is a hard limit of the plan)");
-    const swap = needsSwap
-      ? (g.res.strategy.id === "leveredLong"
-        ? { sellToken: g.res.numeraire, buyToken: g.res.asset, minOut: minOut! }
-        : { sellToken: g.res.asset, buyToken: g.res.numeraire, minOut: minOut! })
-      : undefined;
-    const ttlSeconds = typeof v.ttl === "string" ? BigInt(v.ttl) : undefined;
-    const plan = buildPlan(g.res, g.quote, { now: g.now, core: ctx.profile.core, router, swap, ttlSeconds });
-    output(ctx.json, { ...strategyJson(g), plan: plan as unknown as Record<string, unknown> }, [renderStrategyQuote(ctx, g), "", ...renderStrategyPlan(g, plan)].join("\n"));
+    const plan = planFromGathered(ctx.profile, g, {
+      router: typeof v.router === "string" ? (getAddress(v.router) as Address) : undefined,
+      minOut: typeof v["min-out"] === "string" ? v["min-out"] : undefined,
+      ttlSeconds: typeof v.ttl === "string" ? BigInt(v.ttl) : undefined,
+    });
+    output(ctx.json, { ...gatheredToJson(g), plan: plan as unknown as Record<string, unknown> }, [renderStrategyQuote(ctx, g), "", ...renderStrategyPlan(g, plan)].join("\n"));
   },
 
   "vault activate": async (ctx) => {
@@ -1630,6 +1617,8 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 };
 
 // ───────────────────────── strategy helpers ─────────────────────────
+// Input gathering lives in the SDK (src/sdk/strategies/gather.ts) and is shared with the MCP server;
+// this layer only maps flags → GatherRequest and renders.
 
 /** formatAmount is unsigned; P&L figures carry a sign. */
 function signedAmount(x: bigint, decimals: number): string {
@@ -1640,130 +1629,31 @@ function symbolMap(ctx: Ctx): Map<string, { sym: string; dec: number }> {
   return new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
 }
 
-/** Discovered markets from --source relayer|chain (default: relayer when the profile has one). */
-async function loadDiscoveredMarkets(ctx: Ctx): Promise<DiscoveredMarket[]> {
-  const source = typeof ctx.values.source === "string" ? ctx.values.source : ctx.profile.relayerUrl ? "relayer" : "chain";
-  if (source === "relayer") {
-    const result = await fetchRelayerMarkets(ctx.profile);
-    if (!result.ok) fail(`relayer market index unavailable — not an empty market set: ${result.reason}`);
-    if (result.suspiciousEmpty) fail("index reports full coverage but zero markets — likely a lineage mismatch; use --source chain");
-    return result.markets;
-  }
-  const fromBlock = typeof ctx.values["from-block"] === "string"
-    ? BigInt(ctx.values["from-block"])
-    : BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock — pass --from-block"));
-  return await discoverMarketsOnChain(client(ctx, false), { fromBlock });
-}
-
-async function poolRowsFor(ctx: Ctx, markets: DiscoveredMarket[]): Promise<PoolRow[]> {
-  const by = symbolMap(ctx);
-  const rows: PoolRow[] = [];
-  for (const m of markets) {
-    const loan = by.get(m.params.loanToken.toLowerCase());
-    const coll = by.get(m.params.collateralToken.toLowerCase());
-    rows.push({
-      market: m,
-      loanSymbol: loan?.sym,
-      collateralSymbol: coll?.sym,
-      loanDecimals: loan?.dec ?? (await tokenDecimals(ctx, m.params.loanToken)),
-      collateralDecimals: coll?.dec ?? (await tokenDecimals(ctx, m.params.collateralToken)),
-    });
-  }
-  return rows;
-}
-
-/**
- * Spot in the strategy's own orientation (numeraire per whole asset), WAD. The pair feed answers
- * loan-per-collateral, which IS that number on the credit line and its reciprocal on options/exchange.
- * Advisory: every quote figure derived from it is an estimate; execution is bounded by minOut.
- */
-async function spotPxFor(ctx: Ctx, line: Line, loanSym: string | undefined, collSym: string | undefined): Promise<{ px: PxWad; status: string; pair: string }> {
-  const pair = pairFor(collSym, loanSym);
-  if (!pair) fail("cannot name the spot pair — both legs must be profile token symbols");
-  const ratio = await fetchPairRatio(ctx.profile.relayerUrl, pair);
-  if (!ratio) fail(`spot unavailable for ${pair} (profile.relayerUrl /spot) — the engine cannot place a strike buffer without it`);
-  const x = line === "credit" ? ratio.loanPerCollateral : 1 / ratio.loanPerCollateral;
-  return { px: parseAmount(x.toFixed(18), 18), status: ratio.status, pair };
-}
-
-interface GatheredStrategy {
-  res: StrategyResolution;
-  quote: StrategyQuote;
-  spot: PxWad;
-  spotStatus: string;
-  pair: string;
-  priceWad: bigint;
-  priceFrom: string;
-  size: bigint;
-  now: bigint;
-}
-
-/** What the user puts in, per strategy — the unit of `quote.prepay`. */
-function prepayIsAsset(strategyId: string): boolean {
-  return strategyId === "leveredLong" || strategyId === "protectivePut" || strategyId === "lendAsset";
-}
-
 async function gatherStrategy(ctx: Ctx): Promise<GatheredStrategy> {
   const v = ctx.values;
-  const strategy = getStrategy(need(v.strategy as string | undefined, "strategy"));
-  const asset = resolveToken(ctx.profile, need(v.asset as string | undefined, "asset"));
-  const counter = typeof v.counter === "string" ? resolveToken(ctx.profile, v.counter) : undefined;
-  const maturity = BigInt(need(v.maturity as string | undefined, "maturity"));
-  const bufferPct = Number(need(v.buffer as string | undefined, "buffer"));
-  if (!Number.isFinite(bufferPct)) fail("--buffer must be a number (percent, positive = OTM)");
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  if (maturity <= now) fail("--maturity is in the past");
-
-  const rows = await poolRowsFor(ctx, await loadDiscoveredMarkets(ctx));
-  // One spot fetch: any row on this line that carries the asset names the pair.
-  const probe = rows.find((r) => classifyLine(r.loanSymbol, r.collateralSymbol) === strategy.line && orientation(strategy.line, r).asset.toLowerCase() === asset.address.toLowerCase());
-  if (!probe) fail(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address} — run \`market list\``);
-  const { px: spot, status: spotStatus, pair } = await spotPxFor(ctx, strategy.line, probe.loanSymbol, probe.collateralSymbol);
-
-  const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity, bufferPct }, rows, spot);
-  const sizeDecimals = strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals;
-  const size = parseAmount(need(v.size as string | undefined, "size"), sizeDecimals);
-
-  // Fill price: explicit WAD, a target simple APR, or the live book (borrowers take the best BID,
-  // lenders eat the best ASK).
-  let priceWad: bigint;
-  let priceFrom: string;
-  if (typeof v.price === "string") {
-    if (!/^\d+$/.test(v.price)) fail("--price must be a WAD integer (1e18 = par)");
-    priceWad = BigInt(v.price);
-    priceFrom = "--price";
-  } else if (typeof v["apr-bps"] === "string") {
-    priceWad = priceFromSimpleAprBps(BigInt(v["apr-bps"]), maturity - now);
-    priceFrom = `--apr-bps ${v["apr-bps"]}`;
-  } else {
-    const { entries, source } = await loadBookEntries(ctx, res.row.market.params);
-    const side = res.side === "borrow" ? "bid" : "ask";
-    const best = sortSide(entries, side)[0];
-    if (!best) fail(`no resting ${side} on the resolved market (${source}) — pass --apr-bps <n> or --price <wad> to quote a target rate`);
-    priceWad = best.price;
-    priceFrom = `best ${side} on ${source} (tick ${best.offer.tick}, ${formatAmount(best.size, res.side === "borrow" ? res.assetDecimals : res.numeraireDecimals)} face)`;
-  }
+  const source = typeof v.source === "string" ? v.source : undefined;
+  if (source !== undefined && source !== "relayer" && source !== "chain" && source !== "files") fail("--source must be relayer, chain, or files");
+  const priceWad = typeof v.price === "string" ? (/^\d+$/.test(v.price) ? BigInt(v.price) : fail("--price must be a WAD integer (1e18 = par)")) : undefined;
+  const aprBps = typeof v["apr-bps"] === "string" ? BigInt(v["apr-bps"]) : undefined;
   const sigmaAnnual = typeof v.sigma === "string" ? Number(v.sigma) : undefined;
-  if (sigmaAnnual !== undefined && !(Number.isFinite(sigmaAnnual) && sigmaAnnual > 0)) fail("--sigma must be a positive annualised volatility (e.g. 7.11 for 711%)");
-  const quote = quoteStrategy({ resolution: res, priceWad, spot, sigmaAnnual, now }, size);
-  return { res, quote, spot, spotStatus, pair, priceWad, priceFrom, size, now };
-}
-
-function strategyJson(g: GatheredStrategy): Record<string, unknown> {
-  const { res, quote } = g;
-  return {
-    strategy: res.strategy.id,
-    market: { id: quote.marketId, params: res.row.market.params, line: res.line, side: res.side, strikeHuman: res.strikeHuman, realizedBufferPct: res.realizedBufferPct, alternatives: res.alternatives.map((r) => ({ id: r.market.id, strike: r.market.params.strike })) },
-    asset: res.asset,
-    numeraire: res.numeraire,
-    spot: g.spot,
-    spotStatus: g.spotStatus,
-    priceWad: g.priceWad,
-    priceFrom: g.priceFrom,
-    size: g.size,
-    prepayToken: prepayIsAsset(res.strategy.id) ? res.asset : res.numeraire,
-    quote: quote as unknown as Record<string, unknown>,
-  };
+  return await gatherStrategyInputs(ctx.profile, client(ctx, false), {
+    strategy: need(v.strategy as string | undefined, "strategy"),
+    asset: need(v.asset as string | undefined, "asset"),
+    counter: typeof v.counter === "string" ? v.counter : undefined,
+    size: need(v.size as string | undefined, "size"),
+    maturity: BigInt(need(v.maturity as string | undefined, "maturity")),
+    bufferPct: Number(need(v.buffer as string | undefined, "buffer")),
+    priceWad,
+    aprBps,
+    sigmaAnnual,
+    // `files` is a CLI-only book source (signed-offer files in --dir); chain/relayer discovery is the SDK's.
+    market: {
+      source: source === "files" ? undefined : source,
+      fromBlock: typeof v["from-block"] === "string" ? BigInt(v["from-block"]) : undefined,
+      chunkSize: typeof v["chunk-blocks"] === "string" ? BigInt(v["chunk-blocks"]) : undefined,
+    },
+    book: (params) => loadBookEntries(ctx, params),
+  });
 }
 
 function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
@@ -1791,7 +1681,7 @@ function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
     `  best case:  ${num(quote.payoff.bestCase.amount)}  when ${quote.payoff.bestCase.at}`,
     `  break-even: ${quote.payoff.breakEven === null ? "—" : `${px(quote.payoff.breakEven)} ${N} per ${A}`}`,
     `  boundary:   ${px(quote.payoff.boundary)} ${N} per ${A}  (${{ "forfeit-collateral": "forfeit above", "deliver-collateral": "deliver below", "called-away": "called away above", assigned: "assigned below", premium: "delivery point" }[w.form]})`,
-    `  P(exercise): ${quote.exerciseProbability === null ? "— (pass --sigma <annual vol>)" : `${(quote.exerciseProbability * 100).toFixed(0)}%`}`,
+    `  P(exercise): ${quote.exerciseProbability === null ? "— (pass --sigma <annual vol>)" : `${(quote.exerciseProbability * 100).toFixed(0)}%${g.sigmaSource === "feed" ? " (σ from the pair feed)" : ""}`}`,
   ];
   if (res.alternatives.length) {
     lines.push(`  note: no rung within tolerance of --buffer; nearest rungs: ${res.alternatives.map((r) => r.market.id.slice(0, 10)).join(", ")} (this quote uses the nearest)`);
