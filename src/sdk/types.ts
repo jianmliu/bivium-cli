@@ -59,6 +59,7 @@ export interface DeploymentProfile {
   gasApi?: string;
   /** MaturitySettler periphery for last-window Dutch settlement; absent = not deployed on this chain. */
   maturitySettler?: Address;
+  v4JitKeeper?: Address;
   coreDeploymentBlock?: number;
 }
 

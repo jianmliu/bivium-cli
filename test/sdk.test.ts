@@ -126,3 +126,14 @@ test("moneyness guardrail: S >= R, one rule for every market shape", async () =>
   assert.equal(pairFor("bUSD", "WETH"), "BUSD-ETH");
   assert.equal(pairFor(undefined, "mAI"), null);
 });
+
+test("poolKeyFor sorts the pair by byte order, never by argument order", async () => {
+  const { poolKeyFor } = await import("../src/sdk/settler.ts");
+  const low = "0x34a456c0365B78c5E04b97dee228207cf9CaB35D" as const;  // mCASHCAT
+  const high = "0x628626dE13DD4B5b1cb80d468c261C15dF00D717" as const; // bUSD
+  const a = poolKeyFor(high, low, 3000, 60, "0x0000000000000000000000000000000000000000");
+  const b = poolKeyFor(low, high, 3000, 60, "0x0000000000000000000000000000000000000000");
+  assert.equal(a.currency0, low);
+  assert.equal(a.currency1, high);
+  assert.deepEqual(a, b); // the same pool whichever leg is collateral
+});

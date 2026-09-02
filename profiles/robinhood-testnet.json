@@ -41,5 +41,6 @@
   "relayerUrl": "https://bivium-robinhood.pages.dev/api",
   "gasApi": "https://bivium-robinhood.pages.dev/api/gas",
   "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3",
-  "maturitySettler": "0xD41E8bf7DbA0c3a29EbA3d2c09427ab93DfC9FC4"
+  "maturitySettler": "0xD41E8bf7DbA0c3a29EbA3d2c09427ab93DfC9FC4",
+  "v4JitKeeper": "0x93e5F9368Cd17c232DC0F72536f9645EC480C29A"
 }

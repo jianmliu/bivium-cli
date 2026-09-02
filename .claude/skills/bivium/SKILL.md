@@ -193,6 +193,9 @@ npm run cli --silent -- settle status ${=B} --borrower <addr>
 npm run cli --silent -- settle disarm ${=B}
 # keeper-side (fund the repay yourself, take the Dutch cap unless --ask):
 npm run cli --silent -- settle execute ${=B} --borrower <addr>
+# zero-capital keeper (profiles with v4JitKeeper): a Uniswap v4 pool funds the repay, surplus to your wallet,
+# unprofitable settles revert whole — needs a live v4 pool holding the market's two legs:
+npm run cli --silent -- settle execute ${=B} --borrower <addr> --via-jit --min-profit 0.5
 ```
 
 The floor is BOTH the borrower's protection and the keeper's budget: settlement is reachable only
