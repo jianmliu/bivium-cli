@@ -60,7 +60,7 @@ import {
   type MarketParams,
   type Offer,
 } from "../sdk/index.ts";
-import { SettlerClient, grantCoversSettler, maxSettleableFloor, poolKeyFor } from "../sdk/settler.ts";
+import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor, maxSettleableKeptBps, poolKeyFor } from "../sdk/settler.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
@@ -87,10 +87,10 @@ usage: bivium <command> [options]
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
-  settle arm (market flags | --offer <file>) --floor <human collateral>   # grant (once) + per-market arm
+  settle arm (market flags | --offer <file>) --keep <percent>              # grant (once) + per-market arm: keep >= x% of what settles
   settle disarm (market flags | --offer <file>)
-  settle status (market flags | --offer <file>) [--borrower <addr>]        # floor, cap now, settleable bound
-  settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay
+  settle status (market flags | --offer <file>) [--borrower <addr>]        # floor share, cap now, settleable bound
+  settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay (names the size)
     [--via-jit [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]]  # zero-capital via v4 flash
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
@@ -149,6 +149,7 @@ const OPTIONS = {
   "from-block": { type: "string" },
   "acknowledge-itm": { type: "boolean", default: false },
   borrower: { type: "string" },
+  keep: { type: "string" },
   ask: { type: "string" },
   "via-jit": { type: "boolean" },
   "min-profit": { type: "string" },
@@ -809,12 +810,18 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { marketId: id, params, onchainVerified: true }, `market id: ${id} (on-chain verified)`);
   },
 
-  // --- MaturitySettler: last-window Dutch settlement. Arming is the borrower's two signatures; the floor is
-  // both their protection and the keeper's budget, so `status` prints the settleable bound beside it. ---
+  // --- MaturitySettler: last-window Dutch settlement. Arming is the borrower's two signatures; the floor is a
+  // SHARE of what a settlement unlocks — both their protection and the keeper's budget — so `status` prints the
+  // settleable bound beside it. A share needs no re-arming when the position changes size. ---
   "settle arm": async (ctx) => {
     const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
     const market = await resolveMarket(ctx);
-    const floor = parseAmount(need(ctx.values.floor as string | undefined, "floor"), market.collateralDecimals);
+    let keepBps: number;
+    try {
+      keepBps = keepPercentToBps(need(ctx.values.keep as string | undefined, "keep"));
+    } catch (error) {
+      fail(String((error as Error).message));
+    }
     const sc = new SettlerClient(ctx.profile, accountFor(ctx), settler);
     const me = sc.account;
     const grant = await sc.grantOf(me);
@@ -823,11 +830,11 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       const tx = await sc.grantSettler();
       console.error(`granted CAP_WITHDRAW_COLLATERAL to the settler (one-time, until revoked): ${tx.hash}`);
     }
-    const tx = await sc.arm(market.params, floor);
+    const tx = await sc.arm(market.params, keepBps);
     const id = sc.marketId(market.params);
     const auth = await sc.authorization(id, me);
-    output(ctx.json, { armed: auth.enabled, floor: formatAmount(auth.minCollateralKept, market.collateralDecimals), tx: tx.hash },
-      `armed: keep >= ${formatAmount(auth.minCollateralKept, market.collateralDecimals)} collateral (${tx.hash})`);
+    output(ctx.json, { armed: auth.enabled, keepBps: auth.minKeptBps, tx: tx.hash },
+      `armed: keep >= ${(auth.minKeptBps / 100).toFixed(2)}% of the collateral a settlement unlocks (${tx.hash})`);
   },
   "settle disarm": async (ctx) => {
     const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
@@ -845,30 +852,34 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const [auth, position, window] = await Promise.all([
       sc.authorization(id, borrower), sc.position(id, borrower), sc.settleWindow(),
     ]);
-    const freed = position.collateral + position.collateralWithdrawable;
-    const cap = await sc.maxAsk(freed, market.params.maturity, auth.minCollateralKept);
+    // Only the LOCKED collateral is on the auction's table: what the borrower already freed is forwarded untouched.
+    const freed = position.collateral;
+    const floor = await sc.floorOf(freed, auth.minKeptBps);
+    const cap = await sc.maxAsk(freed, market.params.maturity, floor);
     // The settleable bound needs R; degrade to null when the pair feed cannot answer.
     const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.collateralToken);
     const loanInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.loanToken);
     const pair = pairFor(collInfo?.[0], loanInfo?.[0]);
     const ratio = pair ? await fetchPairRatio(ctx.profile.relayerUrl, pair) : null;
-    const bound = ratio ? maxSettleableFloor(
-      Number(freed) / 10 ** market.collateralDecimals,
-      Number(position.debt) / 10 ** market.loanDecimals,
-      ratio.loanPerCollateral) : null;
+    const collateralUnits = Number(freed) / 10 ** market.collateralDecimals;
+    const debtUnits = Number(position.debt) / 10 ** market.loanDecimals;
+    const bound = ratio ? maxSettleableFloor(collateralUnits, debtUnits, ratio.loanPerCollateral) : null;
+    const boundBps = ratio ? maxSettleableKeptBps(collateralUnits, debtUnits, ratio.loanPerCollateral) : null;
     const fmtC = (v: bigint) => formatAmount(v, market.collateralDecimals);
+    const pct = (bps: number) => `${(bps / 100).toFixed(2)}%`;
     output(ctx.json, {
-      armed: auth.enabled, floor: fmtC(auth.minCollateralKept), debt: formatAmount(position.debt, market.loanDecimals),
+      armed: auth.enabled, keepBps: auth.minKeptBps, floor: fmtC(floor), debt: formatAmount(position.debt, market.loanDecimals),
       collateral: fmtC(position.collateral), withdrawable: fmtC(position.collateralWithdrawable),
       dutchCapNow: fmtC(cap), settleWindowSeconds: window.toString(),
       settleableFloorBound: bound === null ? null : bound.toFixed(6),
+      settleableKeepBpsBound: boundBps,
     }, [
-      `armed ${auth.enabled} | floor ${fmtC(auth.minCollateralKept)} collateral`,
-      `debt ${formatAmount(position.debt, market.loanDecimals)} | collateral ${fmtC(freed)}`,
+      `armed ${auth.enabled} | keep >= ${pct(auth.minKeptBps)} of what settles (= ${fmtC(floor)} collateral on the current position)`,
+      `debt ${formatAmount(position.debt, market.loanDecimals)} | locked collateral ${fmtC(freed)} | already withdrawable ${fmtC(position.collateralWithdrawable)} (forwarded untouched)`,
       `dutch cap now ${fmtC(cap)} | window ${window}s before maturity`,
-      bound === null
-        ? "settleable floor bound: unknown (pair ratio unavailable)"
-        : `settleable floor bound ~${bound.toFixed(6)} collateral — a floor above this arms nothing (no keeper can profit)`,
+      bound === null || boundBps === null
+        ? "settleable bound: unknown (pair ratio unavailable)"
+        : `settleable bound ~${bound.toFixed(6)} collateral (keep <= ${pct(boundBps)}) — a share above this arms nothing (no keeper can profit)`,
     ].join("\n"));
   },
   "settle execute": async (ctx) => {
@@ -880,11 +891,13 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const [auth, position] = await Promise.all([sc.authorization(id, borrower), sc.position(id, borrower)]);
     if (!auth.enabled) fail("borrower has not armed this market");
     if (position.debt === 0n) fail("no debt to settle");
-    const freed = position.collateral + position.collateralWithdrawable;
+    // Only the locked collateral unlocks on repay; the floor is the borrower's share of it.
+    const freed = position.collateral;
+    const floor = await sc.floorOf(freed, auth.minKeptBps);
     // Default to the Dutch cap: asking less only helps against rival keepers, who are the mechanism for that.
     const ask = typeof ctx.values.ask === "string"
       ? parseAmount(ctx.values.ask, market.collateralDecimals)
-      : await sc.maxAsk(freed, market.params.maturity, auth.minCollateralKept);
+      : await sc.maxAsk(freed, market.params.maturity, floor);
     if (ctx.values["via-jit"]) {
       // Zero-capital route: the V4JitKeeper funds the repay from a v4 pool's flash accounting and pays this
       // wallet the surplus. Nothing to hold, nothing to approve — an unprofitable settle reverts whole.
@@ -901,9 +914,11 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
         `settled via v4 flash: repaid ${formatAmount(position.debt, market.loanDecimals)} loan with the pool's money, ask ${formatAmount(ask, market.collateralDecimals)} collateral, surplus to this wallet (${tx.hash})`);
       return;
     }
-    // The keeper fronts the whole debt: approve exactly it, then settle.
+    // The keeper fronts the debt it just read and names that size on-chain: approve exactly it, then settle. If
+    // the debt moves before the transaction lands, a repay-in-full market refuses the slice and a partial-repay
+    // market settles exactly this much — either way the keeper never advances more than it priced.
     await sc.approveExact(market.params.loanToken, settler, position.debt);
-    const tx = await sc.settle(market.params, borrower, ask);
+    const tx = await sc.settle(market.params, borrower, position.debt, ask);
     output(ctx.json, { settled: true, repaid: formatAmount(position.debt, market.loanDecimals), ask: formatAmount(ask, market.collateralDecimals), tx: tx.hash },
       `settled: fronted ${formatAmount(position.debt, market.loanDecimals)} loan, ask ${formatAmount(ask, market.collateralDecimals)} collateral (${tx.hash})`);
   },
