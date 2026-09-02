@@ -49,6 +49,8 @@ export const coreV2Abi = parseAbi([
   "function position(bytes32 id, address borrower) view returns (Position)",
   "function creditOf(bytes32 id, address holder) view returns (uint256)",
   "function liquidityOf(bytes32 id, address lender) view returns (uint256)",
+  // bivium-core #171: collateral a borrower escrowed so its resting ASK can originate debt when filled.
+  "function collateralEscrowOf(bytes32 id, address borrower) view returns (uint256)",
 ]);
 
 export const ratifierV1Abi = parseAbi([

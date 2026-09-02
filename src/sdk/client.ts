@@ -152,6 +152,14 @@ export class BiviumClient {
     return await this.readCore("liquidityOf", [id, lender]);
   }
 
+  /**
+   * Collateral the borrower escrowed for resting asks (bivium-core #171). Cores that predate the escrow surface have
+   * no such function; the read then fails and callers treat the escrow as zero — the pre-#171 rule.
+   */
+  async collateralEscrowOf(id: Hex, borrower: Address): Promise<bigint> {
+    return await this.readCore("collateralEscrowOf", [id, borrower]);
+  }
+
   async consumed(maker: Address, group: Hex): Promise<bigint> {
     return await this.readCore("consumed", [maker, group]);
   }
