@@ -40,6 +40,8 @@ const evidenceKeys: MarketRiskEvidenceKey[] = [
   "exitSlippageBps",
   "referencePrice",
 ];
+const evidenceKeySet = new Set<string>(evidenceKeys);
+const collateralKinds = new Set(["stock-token", "ai-token", "meme", "other"]);
 
 function isKnown<T>(evidence: RiskEvidence<T>): evidence is RiskEvidence<T> & { value: T } {
   return (evidence.state === "observed" || evidence.state === "warning") && evidence.value !== undefined;
@@ -87,6 +89,50 @@ function validateSelectedPolicy(selected: unknown): asserts selected is Selected
   }
 }
 
+function validateRiskInput(input: unknown): asserts input is MarketRiskInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("invalid risk input: expected an object");
+  }
+  const candidate = input as { market?: unknown; collateralKind?: unknown; evidence?: unknown };
+  if (typeof candidate.market !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(candidate.market)) {
+    throw new Error("invalid risk input: invalid risk market id; expected bytes32 hex");
+  }
+  if (typeof candidate.collateralKind !== "string" || !collateralKinds.has(candidate.collateralKind)) {
+    throw new Error("invalid risk input: unknown collateralKind");
+  }
+  if (typeof candidate.evidence !== "object" || candidate.evidence === null || Array.isArray(candidate.evidence)) {
+    throw new Error("invalid risk input: evidence must be an object");
+  }
+  for (const key of Object.keys(candidate.evidence)) {
+    if (!evidenceKeySet.has(key)) throw new Error(`invalid risk input: unknown evidence key ${key}`);
+  }
+}
+
+function normalizeEvidence(key: MarketRiskEvidenceKey, datum: unknown): {
+  evidence: RiskEvidence<never> | MarketRiskEvidence[MarketRiskEvidenceKey];
+  malformed: boolean;
+} {
+  if (typeof datum !== "object" || datum === null || Array.isArray(datum)) {
+    return { evidence: unknown(`invalid ${key} evidence entry`), malformed: true };
+  }
+  const entry = datum as Record<string, unknown>;
+  const states = new Set(["observed", "warning", "unknown", "not_applicable"]);
+  const metadataValid = (entry.source === undefined || typeof entry.source === "string")
+    && (entry.observedAt === undefined || typeof entry.observedAt === "string");
+  const stateValid = typeof entry.state === "string" && states.has(entry.state);
+  const smuggledValue = (entry.state === "unknown" || entry.state === "not_applicable")
+    && Object.hasOwn(entry, "value");
+  const knownValueInvalid = (entry.state === "observed" || entry.state === "warning")
+    && !validValue(key, entry.value);
+  if (!metadataValid || !stateValid || smuggledValue || knownValueInvalid) {
+    return {
+      evidence: unknown(`invalid ${key} evidence`, typeof entry.observedAt === "string" ? entry.observedAt : undefined),
+      malformed: true,
+    };
+  }
+  return { evidence: datum as MarketRiskEvidence[MarketRiskEvidenceKey], malformed: false };
+}
+
 /**
  * Agent-side screening only. This reports risky collateral; it does not mutate or call Core.
  * Core is permissionless and does not approve assets.
@@ -95,20 +141,16 @@ export function assessRisk(
   input: MarketRiskInput,
   selectedPolicy: SelectedRiskPolicy = DEFAULT_POLICY_SELECTION,
 ): MarketRiskReport {
-  if (typeof input.market !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(input.market)) {
-    throw new Error("invalid risk market id: expected bytes32 hex");
-  }
+  validateRiskInput(input);
   validateSelectedPolicy(selectedPolicy);
   const policy = selectedPolicy.rules;
   let malformedEvidence = false;
   const evidence = Object.fromEntries(evidenceKeys.map((key) => {
     const datum = input.evidence[key];
     if (!datum) return [key, unknown("required evidence not provided")];
-    if ((datum.state === "observed" || datum.state === "warning") && !validValue(key, datum.value)) {
-      malformedEvidence = true;
-      return [key, unknown(`invalid ${key} evidence type`, datum.observedAt)];
-    }
-    return [key, datum];
+    const normalized = normalizeEvidence(key, datum);
+    malformedEvidence ||= normalized.malformed;
+    return [key, normalized.evidence];
   })) as MarketRiskEvidence;
   const unknowns: string[] = [];
   const facts: MarketRiskReport["facts"] = [];
@@ -149,11 +191,13 @@ export function assessRisk(
   }
   if (policy.maxTop10HolderPct !== undefined && isKnown(evidence.top10HolderPct)
       && typeof evidence.top10HolderPct.value === "number" && evidence.top10HolderPct.value > policy.maxTop10HolderPct) {
-    warn("HOLDER_CONCENTRATION", "warning", `Top-ten holders exceed ${policy.maxTop10HolderPct}% of supply.`);
+    warn("HOLDER_CONCENTRATION", "critical", `Top-ten holders exceed ${policy.maxTop10HolderPct}% of supply.`);
+    rejected = true;
   }
   if (policy.maxExitSlippageBps !== undefined && isKnown(evidence.exitSlippageBps)
       && typeof evidence.exitSlippageBps.value === "number" && evidence.exitSlippageBps.value > policy.maxExitSlippageBps) {
-    warn("EXIT_SLIPPAGE", "warning", `Estimated exit slippage exceeds ${policy.maxExitSlippageBps} bps.`);
+    warn("EXIT_SLIPPAGE", "critical", `Estimated exit slippage exceeds ${policy.maxExitSlippageBps} bps.`);
+    rejected = true;
   }
   if (input.collateralKind === "meme") {
     warn(

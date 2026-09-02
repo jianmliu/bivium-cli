@@ -270,3 +270,51 @@ test("delivery stress keeps amount arithmetic in bigint and rounds percentages t
   assert.equal(scenarios[0]?.estimatedLoss, 4n);
   assert.equal(scenarios[0]?.estimatedPrincipalLossPct, 57.14);
 });
+
+test("policy maxima reject exceeded metrics while boundary values can accept", () => {
+  const concentrated = benign();
+  concentrated.evidence.top10HolderPct = observed(80.01);
+  const illiquid = benign();
+  illiquid.evidence.exitSlippageBps = observed(2_001);
+
+  for (const input of [concentrated, illiquid]) {
+    const report = assessRisk(input);
+    assert.equal(report.decision, "reject");
+    assert.ok(report.warnings.some(({ severity }) => severity === "critical"));
+  }
+
+  const boundary = benign();
+  boundary.evidence.top10HolderPct = observed(80);
+  boundary.evidence.exitSlippageBps = observed(2_000);
+  assert.equal(assessRisk(boundary).decision, "accept");
+});
+
+test("invalid top-level SDK risk input throws a clear schema error", () => {
+  const invalid: unknown[] = [
+    null,
+    { ...benign(), collateralKind: "stablecoin" },
+    { ...benign(), evidence: [] },
+    { ...benign(), evidence: { ...benign().evidence, surprise: observed(true) } },
+  ];
+  for (const input of invalid) {
+    assert.throws(() => assessRisk(input as never), /invalid risk input/i);
+  }
+});
+
+test("malformed evidence entries normalize to unknown and force non-accept", () => {
+  const malformed: unknown[] = [
+    true,
+    { state: "trusted", value: false },
+    { state: "observed", value: false, source: 7 },
+    { state: "observed", value: false, observedAt: 7 },
+    { state: "unknown", value: false },
+    { state: "not_applicable", value: false },
+  ];
+  for (const entry of malformed) {
+    const input = benign();
+    (input.evidence as Record<string, unknown>).mintable = entry;
+    const report = assessRisk(input);
+    assert.equal(report.decision, "require_user_confirmation");
+    assert.ok(report.unknowns.includes("mintable"));
+  }
+});
