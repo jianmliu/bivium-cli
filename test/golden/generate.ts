@@ -64,7 +64,7 @@ function vector(c: Case) {
 
 const out = { generatedBy: "bivium-cli src/sdk/strategies (L1 canonical)", conventions: {
   buffer: "percent in the strategy's OTM direction, human price space: options/exchange = 100·(K/S₀ − 1), credit = 100·(1 − K/S₀)",
-  probability: "one-sided lognormal: 1 − Φ(ln(1 + b)/(σ·√(days/365)))",
+  probability: "one-sided lognormal at the strategy's OWN exercise boundary B (= payoff.boundary, which is K except for leveredLong where B = face ÷ total collateral): above → 1 − Φ(ln(B/S₀)/(σ·√(days/365))), below → Φ(ln(B/S₀)/(σ·√(days/365)))",
   prepayUnit: "numeraire for short/pairShort/lendQuote; asset for leveredLong (topUp), protectivePut (holding) and lendAsset (lent)",
   amounts: "exact bigint atoms; human floats must match to 1e-6 relative",
 }, vectors: CASES.map(vector) };
