@@ -126,6 +126,9 @@ export function quoteParity(local: GatheredStrategy, http: HttpQuoteResult, opts
   if (local.quote.exerciseProbability !== null && q.exerciseProbability !== undefined) {
     checks.push({ field: "exerciseProbability", local: local.quote.exerciseProbability, http: q.exerciseProbability, ok: false });
   }
-  for (const c of checks) c.ok = close(c.local, c.http, c.field === "exerciseProbability" ? 1e-9 : 10 ** -(c.field === "boundary" || c.field === "breakEven" ? 9 : Math.min(nd, ad)) * 2);
+  // Amounts and prices must agree to the atom / 1e-9; the probability is measured at each side's own `now`, so a
+  // few seconds between the two requests moves σ√t (observed ~4e-6 live) — 1e-4 absolute is far above that jitter
+  // and far below any real formula disagreement (moving the boundary shifted a levered long by ~0.18).
+  for (const c of checks) c.ok = close(c.local, c.http, c.field === "exerciseProbability" ? 1e-4 : 10 ** -(c.field === "boundary" || c.field === "breakEven" ? 9 : Math.min(nd, ad)) * 2);
   return { status: checks.every((c) => c.ok) ? "ok" : "mismatch", checks, marketId: q.market.marketId };
 }

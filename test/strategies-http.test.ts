@@ -75,6 +75,9 @@ test("parity: agreement is ok; a different number is a loud mismatch; off-book p
   const agree = quoteParity(local, { ok: true, quote: appQuoteFrom(local) });
   assert.equal(agree.status, "ok");
   assert.ok(agree.status === "ok" && agree.checks.every((c) => c.ok) && agree.checks.some((c) => c.field === "exerciseProbability"));
+  // Request-time jitter in P(exercise) is tolerated; a formula-sized gap is not.
+  assert.equal(quoteParity(local, { ok: true, quote: appQuoteFrom(local, { exerciseProbability: (local.quote.exerciseProbability ?? 0) + 5e-6 }) }).status, "ok");
+  assert.equal(quoteParity(local, { ok: true, quote: appQuoteFrom(local, { exerciseProbability: (local.quote.exerciseProbability ?? 0) + 0.01 }) }).status, "mismatch");
   const drift = quoteParity(local, { ok: true, quote: appQuoteFrom(local, { prepay: 900 }) });
   assert.equal(drift.status, "mismatch");
   assert.deepEqual(drift.status === "mismatch" ? drift.checks.filter((c) => !c.ok).map((c) => c.field) : [], ["prepay"]);
