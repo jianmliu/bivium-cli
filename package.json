@@ -4,10 +4,11 @@
   "description": "SDK + CLI for the Bivium fixed-rate credit primitive (core-v1 ABI lineage)",
   "type": "module",
   "license": "MIT",
-  "bin": { "bivium": "./bin/bivium.mjs" },
+  "bin": { "bivium": "./bin/bivium.mjs", "bivium-mcp": "./bin/bivium-mcp.mjs" },
   "exports": { ".": "./src/sdk/index.ts" },
   "scripts": {
     "cli": "tsx src/cli/main.ts",
+    "mcp": "tsx src/mcp/server.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
