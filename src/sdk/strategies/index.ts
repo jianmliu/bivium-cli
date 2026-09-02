@@ -6,3 +6,4 @@ export * from "./catalog.ts";
 export * from "./resolve.ts";
 export * from "./quote.ts";
 export * from "./plan.ts";
+export * from "./risk.ts";

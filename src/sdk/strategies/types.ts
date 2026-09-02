@@ -197,3 +197,47 @@ export interface Plan {
   quoteId: Hex;
   validUntil: bigint;
 }
+
+/** Whether a risk datum was seen, unavailable, or does not apply to this collateral. */
+export type EvidenceState = "observed" | "warning" | "unknown" | "not_applicable";
+export type CollateralKind = "stock-token" | "ai-token" | "meme" | "other";
+export type RiskDecision = "accept" | "reject" | "require_user_confirmation";
+
+export interface RiskEvidence<T> {
+  state: EvidenceState;
+  value?: T;
+  source?: string;
+  observedAt?: string;
+}
+
+export interface RiskWarning {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  message: string;
+}
+
+export interface AgentRiskPolicy {
+  rejectArbitraryMint: boolean;
+  rejectUnsellable: boolean;
+  confirmOnUnknown: boolean;
+  maxTop10HolderPct?: number;
+  maxExitSlippageBps?: number;
+}
+
+export type MarketRiskEvidenceKey = "mintable" | "freezable" | "blacklistable" | "upgradeable"
+  | "sellability" | "top10HolderPct" | "exitSlippageBps" | "referencePrice";
+
+export interface MarketRiskInput {
+  market: string;
+  collateralKind: CollateralKind;
+  evidence: Partial<Record<MarketRiskEvidenceKey, RiskEvidence<boolean | number | string>>>;
+}
+
+export interface MarketRiskReport {
+  market: string;
+  facts: Array<{ key: string; value: unknown; source?: string; observedAt?: string }>;
+  warnings: RiskWarning[];
+  unknowns: string[];
+  decision: RiskDecision;
+  decisionSource: "user-policy" | "agent-policy";
+}
