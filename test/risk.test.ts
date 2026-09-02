@@ -54,6 +54,9 @@ test("meme collateral always carries delivery risk and Core approval disclaimer"
 
   assert.ok(warning);
   assert.match(warning.message, /Core does not approve assets/i);
+  assert.match(warning.message, /borrower may rationally not repay/i);
+  assert.match(warning.message, /severely impaired or worthless Meme/i);
+  assert.match(warning.message, /all economically recoverable principal is lost/i);
 });
 
 test("complete benign evidence is accepted", () => {
@@ -65,10 +68,56 @@ test("complete benign evidence is accepted", () => {
 });
 
 test("caller can identify a user policy as the decision source", () => {
-  const report = assessRisk(benign(), { maxTop10HolderPct: 50 }, "user-policy");
+  const report = assessRisk(benign(), {
+    source: "user-policy",
+    rules: {
+      rejectArbitraryMint: true,
+      rejectUnsellable: true,
+      confirmOnUnknown: true,
+      maxTop10HolderPct: 50,
+      maxExitSlippageBps: 2_000,
+    },
+  });
 
   assert.equal(report.decision, "accept");
   assert.equal(report.decisionSource, "user-policy");
+});
+
+test("malformed JSON evidence fails closed instead of being treated as benign", () => {
+  const malformed: Array<[string, unknown]> = [
+    ["mintable", "true"],
+    ["sellability", "false"],
+    ["top10HolderPct", "40"],
+    ["exitSlippageBps", Number.NaN],
+    ["exitSlippageBps", Number.POSITIVE_INFINITY],
+    ["referencePrice", Number.NEGATIVE_INFINITY],
+  ];
+
+  for (const [key, value] of malformed) {
+    const input = benign();
+    // Models data arriving from an untyped JSON boundary.
+    (input.evidence as Record<string, unknown>)[key] = observed(value);
+    const report = assessRisk(input);
+    assert.notEqual(report.decision, "accept", `${key}=${String(value)} must not pass`);
+    assert.ok(report.unknowns.includes(key), `${key} must be classified unknown`);
+  }
+});
+
+test("malformed evidence cannot be accepted by disabling ordinary unknown confirmation", () => {
+  const input = benign();
+  (input.evidence as Record<string, unknown>).mintable = observed("false");
+
+  const report = assessRisk(input, {
+    source: "user-policy",
+    rules: {
+      rejectArbitraryMint: true,
+      rejectUnsellable: true,
+      confirmOnUnknown: false,
+    },
+  });
+
+  assert.notEqual(report.decision, "accept");
+  assert.ok(report.unknowns.includes("mintable"));
 });
 
 test("a reject condition wins over unknown evidence deterministically", () => {

@@ -1,10 +1,12 @@
 import type {
   AgentRiskPolicy,
+  MarketRiskEvidence,
   MarketRiskEvidenceKey,
   MarketRiskInput,
   MarketRiskReport,
   RiskEvidence,
   RiskWarning,
+  SelectedRiskPolicy,
 } from "./types.ts";
 
 export const DEFAULT_AGENT_POLICY: Readonly<AgentRiskPolicy> = Object.freeze({
@@ -13,6 +15,11 @@ export const DEFAULT_AGENT_POLICY: Readonly<AgentRiskPolicy> = Object.freeze({
   confirmOnUnknown: true,
   maxTop10HolderPct: 80,
   maxExitSlippageBps: 2_000,
+});
+
+export const DEFAULT_POLICY_SELECTION: Readonly<SelectedRiskPolicy> = Object.freeze({
+  source: "agent-policy",
+  rules: DEFAULT_AGENT_POLICY,
 });
 
 export function observed<T>(value: T, source = "unspecified", observedAt?: string): RiskEvidence<T> {
@@ -38,20 +45,35 @@ function isKnown<T>(evidence: RiskEvidence<T>): evidence is RiskEvidence<T> & { 
   return (evidence.state === "observed" || evidence.state === "warning") && evidence.value !== undefined;
 }
 
+const booleanKeys = new Set<MarketRiskEvidenceKey>([
+  "mintable", "freezable", "blacklistable", "upgradeable", "sellability",
+]);
+
+function validValue(key: MarketRiskEvidenceKey, value: unknown): boolean {
+  if (booleanKeys.has(key)) return typeof value === "boolean";
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return key !== "referencePrice" || value > 0;
+}
+
 /**
  * Agent-side screening only. This reports risky collateral; it does not mutate or call Core.
  * Core is permissionless and does not approve assets.
  */
 export function assessRisk(
   input: MarketRiskInput,
-  policyOverrides: Partial<AgentRiskPolicy> = {},
-  decisionSource: MarketRiskReport["decisionSource"] = "agent-policy",
+  selectedPolicy: SelectedRiskPolicy = DEFAULT_POLICY_SELECTION,
 ): MarketRiskReport {
-  const policy: AgentRiskPolicy = { ...DEFAULT_AGENT_POLICY, ...policyOverrides };
-  const evidence = Object.fromEntries(evidenceKeys.map((key) => [
-    key,
-    input.evidence[key] ?? unknown("required evidence not provided"),
-  ])) as Record<MarketRiskEvidenceKey, RiskEvidence<boolean | number | string>>;
+  const policy = selectedPolicy.rules;
+  let malformedEvidence = false;
+  const evidence = Object.fromEntries(evidenceKeys.map((key) => {
+    const datum = input.evidence[key];
+    if (!datum) return [key, unknown("required evidence not provided")];
+    if ((datum.state === "observed" || datum.state === "warning") && !validValue(key, datum.value)) {
+      malformedEvidence = true;
+      return [key, unknown(`invalid ${key} evidence type`, datum.observedAt)];
+    }
+    return [key, datum];
+  })) as MarketRiskEvidence;
   const unknowns: string[] = [];
   const facts: MarketRiskReport["facts"] = [];
 
@@ -101,15 +123,15 @@ export function assessRisk(
     warn(
       "MEME_DELIVERY_RISK",
       "warning",
-      "Meme collateral has heightened delivery and exit risk. Core does not approve assets; it is permissionless.",
+      "After a Meme collapse, the borrower may rationally not repay; the lender may receive severely impaired or worthless Meme. No-liquidation settlement can operate correctly while all economically recoverable principal is lost. Core does not approve assets; it is permissionless.",
     );
   }
 
   const decision = rejected
     ? "reject"
-    : policy.confirmOnUnknown && unknowns.length > 0
+    : (policy.confirmOnUnknown || malformedEvidence) && unknowns.length > 0
       ? "require_user_confirmation"
       : "accept";
 
-  return { market: input.market, facts, warnings, unknowns, decision, decisionSource };
+  return { market: input.market, facts, warnings, unknowns, decision, decisionSource: selectedPolicy.source };
 }

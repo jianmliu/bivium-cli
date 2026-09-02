@@ -227,10 +227,30 @@ export interface AgentRiskPolicy {
 export type MarketRiskEvidenceKey = "mintable" | "freezable" | "blacklistable" | "upgradeable"
   | "sellability" | "top10HolderPct" | "exitSlippageBps" | "referencePrice";
 
+export interface MarketRiskEvidenceValue {
+  mintable: boolean;
+  freezable: boolean;
+  blacklistable: boolean;
+  upgradeable: boolean;
+  sellability: boolean;
+  top10HolderPct: number;
+  exitSlippageBps: number;
+  referencePrice: number;
+}
+
+export type MarketRiskEvidence = {
+  [K in MarketRiskEvidenceKey]: RiskEvidence<MarketRiskEvidenceValue[K]>;
+};
+
+export interface SelectedRiskPolicy {
+  source: "user-policy" | "agent-policy";
+  rules: AgentRiskPolicy;
+}
+
 export interface MarketRiskInput {
   market: string;
   collateralKind: CollateralKind;
-  evidence: Partial<Record<MarketRiskEvidenceKey, RiskEvidence<boolean | number | string>>>;
+  evidence: Partial<MarketRiskEvidence>;
 }
 
 export interface MarketRiskReport {
