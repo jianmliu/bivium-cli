@@ -126,6 +126,8 @@ export interface Payoff {
   bestCase: { amount: bigint; at: string };
   /** S_T at which pnl == 0, or null if the strategy never crosses zero. */
   breakEven: PxWad | null;
+  /** The exact exercise/delivery price: forfeit-above / deliver-below / called-away-above / assigned-below. */
+  boundary: PxWad;
 }
 
 export interface QuoteInputs {

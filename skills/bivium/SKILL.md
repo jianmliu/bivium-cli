@@ -189,3 +189,230 @@ npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$H
   Core state, Bivium infrastructure, an optional provider, or the selected policy.
 
 For command details, read `README.md` while keeping the Robinhood Chain execution boundary above.
+
+The operational reference below is subordinate to the Robinhood Chain execution boundary above.
+For full command details, read `README.md`.
+
+Strikes print in the pair's own unit — `400 bUSD/TSLA`, `8000 mAI/mNVDA`,
+`0.005 mNVDA/bUSD (= 200 bUSD per mNVDA)` — because the strike is a ratio between the two legs,
+and a market's three possible shapes (volatile collateral = credit line, volatile loan = options
+line, both volatile = ratio/Pairs line) differ only in which leg carries the price risk. The rules
+and commands are identical across all three; only the reading changes.
+Create a new market identity only when the user explicitly wants terms nothing existing offers,
+and say so when you do. `[gated]` rows have an access-controlled gate; prefer ungated ones unless
+you know you pass the gate. `--source relayer` uses the hosted index instead of scanning; if it
+reports full coverage with zero markets, that is a lineage mismatch, not an empty chain — fall
+back to `--source chain`.
+
+## Mental model (30 seconds)
+
+- A **market** is identified by its parameters (loan token, collateral token, maturity, strike,
+  partial-repay flag, gate). Markets are created lazily — the first `fund`/`fill` creates them.
+- **Lenders** escrow loan tokens (`maker fund`) and sign resting **buy offers** (bids). A borrower
+  filling a bid mints **DCN** credit to the lender and takes the principal.
+- **Borrowers** never post offers to borrow — they take a maker's bid, locking collateral at the
+  strike ratio. Repay is only possible strictly **before maturity**; from maturity on, unpaid
+  collateral goes to the settlement basket and credit holders `claim` a pro-rata mix.
+- **DCN trading** is secondary transfer of that credit: asks sell held credit, bids buy it. All
+  prices live on a tick grid; APR is derived display, not a protocol term.
+
+Amounts are exact decimal strings in human units ("600", "0.01") — the CLI converts using the
+token's exact decimals and rejects over-precision rather than rounding. Add `--json` whenever you
+need to parse output. In zsh, expand flag-bundles with `${=VAR}` (unquoted vars do not word-split).
+
+When a HUMAN is driving interactively, offer `bivium wizard` instead of raw flags — one entry
+point covering all three intents (出借挂单 with funding assistance: auto-detects short escrow and
+offers mint/fund/set-ratifier; 抵押借款: pick a live bid, quote shown before execution, collateral
+minted with consent, repay deadline and command printed after; 交易 DCN: book display, plan shown
+before the sweep). For a quick position/order overview use `bivium portfolio [--account]` — it
+aggregates borrow positions, DCN holdings, escrow, and resting orders across all discovered
+markets. `maker wizard` remains as the lend-path alias — it lists the
+discovered markets (with moneyness/gated flags), prompts for amount and price, requires an
+explicit `yes-itm` on in-the-money markets, and confirms before signing. Agents keep using flags.
+
+## Workflow: lend (存款借出)
+
+```bash
+# pick B from `market list` output — join an existing market unless told otherwise
+B="--loan USDC --collateral WETH --maturity 1788828951 --floor 3000"   # market flags, reused below
+npm run cli --silent -- mock mint --token USDC --to <maker-addr> --amount 1000   # testnet only
+npm run cli --silent -- maker set-ratifier          # once per account per deployment
+npm run cli --silent -- maker fund ${=B} --assets 600
+npm run cli --silent -- maker make-offer ${=B} --side buy --apr-bps 1000 --max-units 600 \
+    --ttl 86400 --out bid.json                       # signs EIP-712; refuses to write unless the
+                                                     # on-chain ratifier confirms RATIFIED
+```
+
+- `--apr-bps` derives the tick from remaining term; use `--tick` for direct grid placement.
+- `--publish` also POSTs the offer to the profile's relayer (needs `relayerUrl`; core-v2 only) so
+  web-app users can see and fill it. Without it, hand the `bid.json` file to the counterparty.
+- Track fills with `order list --maker <addr> ${=B}`; withdraw unused escrow with
+  `maker withdraw-liquidity`. After maturity, redeem with `claim ${=B} --units <face>` — the payout
+  can be loan tokens, collateral, or a mix; that is the product, not an error.
+
+## Workflow: borrow (抵押借入)
+
+```bash
+npm run cli --silent -- book list ${=B} --source relayer        # or --source files --dir <dir>
+npm run cli --silent -- borrow quote --offer bid.json --units 100
+npm run cli --silent -- borrow execute --offer bid.json --units 100
+# ... before maturity:
+npm run cli --silent -- repay --offer bid.json --assets 100
+npm run cli --silent -- reclaim --offer bid.json
+```
+
+Always `quote` before `execute` and surface the numbers (principal received, collateral locked,
+implied APR) to the user before spending. `execute` runs the full preflight (offer window,
+remaining capacity, maker liquidity, RATIFIED signature) and verifies the received principal
+matches the quote to the atom — if it aborts, read the reason; do not retry blindly. Repayment
+needs the **exact face** in the loan token (principal received is less than face — the difference
+is the interest), and reclaiming collateral is a separate transaction after repay.
+
+## Workflow: strategies (策略工具箱)
+
+A strategy is a NAMED composition of the actions above (fill a bid / eat an ask / fund + at most
+one swap) — never a new primitive. The engine picks the market for the user from a VIEW (asset,
+tenor, strike buffer), and every quote is maturity-only: the payoff has one variable, S_T, and the
+worst case is stated with its FORM (forfeit collateral / deliver collateral / called away /
+assigned). There is no liquidation to model, so the words "liquidation price" never appear.
+
+```bash
+npm run cli --silent -- strategy list                       # catalog: id, name, group, side/line, mirror
+# quote: resolve the nearest strike rung 48% above spot for a 7-day short of mAI, priced off the live book
+npm run cli --silent -- strategy quote --strategy short --asset mAI --size 10000 --maturity <unix> --buffer 48 \
+    --source relayer --sigma 7.11            # borrowers take the best BID, lenders eat the best ASK
+# or price a target rate instead of the book:
+npm run cli --silent -- strategy quote --strategy lendQuote --asset mNVDA --size 1000 --maturity <unix> --buffer 20 --apr-bps 1500
+# plan: the same flags + hard limits; a swap leg needs --min-out; nothing is sent
+npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000 --maturity <unix> --buffer 48 \
+    --source relayer --min-out 1000
+```
+
+- `strategy quote` prints the five confirm-screen numbers — **prepay, premium, WORST CASE (+ form),
+  break-even, P(exercise)** — and a payoff table. Surface all five to the user before anything is
+  spent; the prepay of a borrow-and-sell strategy IS its worst case. Figures are estimates off the
+  pair feed's spot (`spotStatus: stale` is flagged); execution is bounded by `minOut`.
+- `--buffer` is the strike distance from spot in the OTM direction (positive = OTM). When no rung is
+  within tolerance the quote uses the nearest and lists the alternatives — offer them, don't invent
+  a market (see Discovery above).
+- `strategy plan` never executes. Its `mode` is `intent` (single leg), `router` (atomic, needs a
+  Router on the profile) or `sequential` — the last is explicitly NOT atomic (approve → fill → swap
+  are separate txs); say so before running the steps with `borrow execute` / `trade buy`.
+- Pricing off the book (`--source relayer`) needs a RESTING bid (borrower) / ask (lender) on the resolved
+  market; on a thin testnet it will say so — quote a target rate with `--apr-bps <n>` (or `--price <wad>`) instead.
+- `--sigma` (annualised realised vol, e.g. `7.11` = 711%) is advisory: it only feeds P(exercise).
+- Combos (`straddle`, `shortVol`, `collar`, `spread`) are listed but not quotable as one unit until
+  the Router lands — quote each leg separately.
+
+### The MCP twin (`bivium-mcp`)
+
+The same engine is exposed as MCP tools over stdio for agents that prefer tool calls to shelling
+out — READ-ONLY by design (list, discover, quote, plan); execution stays with the CLI under the
+user's key. Register it in the client's MCP config:
+
+```json
+{ "mcpServers": { "bivium-strategies": { "command": "npx", "args": ["--prefix", "<bivium-cli>", "bivium-mcp"],
+                                          "env": { "BIVIUM_PROFILE": "<bivium-cli>/profiles/robinhood-testnet.json" } } } }
+```
+
+Tools: `strategy_list` (the catalog — read it first), `market_list` (pick a maturity; join existing
+markets), `strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),
+`strategy_plan` (mode + steps + hard limits; never executes). Arguments mirror the CLI flags
+(`strategy, asset, size, maturity, bufferPct, aprBps | priceWad, sigma`). Tool failures come back as
+`isError` results whose text says what to change (e.g. "pass aprBps or priceWad").
+
+## Workflow: auto-settle (到期兜底 / borrow-and-forget)
+
+On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
+collateral goes to the credit holders — which punishes exactly the borrower who judged the market
+right. A borrower can arm the MaturitySettler (profiles with `maturitySettler`; Robinhood testnet
+has it): in the final 6h window a keeper repays for them under a Dutch-auction fee cap, never
+leaving them below a floor they chose.
+
+```bash
+npm run cli --silent -- settle arm ${=B} --keep 90           # one-time core grant + per-market arm: keep >= 90% of what settles
+npm run cli --silent -- settle status ${=B} --borrower <addr>
+npm run cli --silent -- settle disarm ${=B}
+# keeper-side (fund the repay yourself, take the Dutch cap unless --ask):
+npm run cli --silent -- settle execute ${=B} --borrower <addr>
+# zero-capital keeper (profiles with v4JitKeeper): a Uniswap v4 pool funds the repay, surplus to your wallet,
+# unprofitable settles revert whole — needs a live v4 pool holding the market's two legs:
+npm run cli --silent -- settle execute ${=B} --borrower <addr> --via-jit --min-profit 0.5
+```
+
+The floor is a SHARE — `--keep <percent>` of the collateral a settlement unlocks that must come back
+to the borrower — so it needs no re-arming when the position grows, shrinks, or is settled in
+slices; 100% is refused. Collateral the borrower already freed (`withdrawable`) is forwarded
+untouched and is never part of the keeper's budget. The share is BOTH the borrower's protection
+and the keeper's budget: settlement is reachable only while `keep% × locked < locked − debt/R`.
+`settle status` prints that bound as a percentage — **a share above it arms nothing** (no keeper
+can ever profit), so always read the bound before choosing one, and treat "settleable bound ~0" as
+the position being underwater: walking away is then the rational branch and arming cannot help.
+Delivery is a legitimate election — a borrower who WANTS to be assigned simply never arms.
+`settle execute` fronts the debt it reads and NAMES that size on-chain (keeper profit = ask×R −
+debt): it approves exactly the debt and defaults the ask to the current Dutch cap; if the debt moves
+before the transaction lands, a repay-in-full market refuses and a partial-repay market settles
+exactly the named slice, so the keeper never advances more than it priced.
+
+## Workflow: trade DCN (交易挂单)
+
+```bash
+npm run cli --silent -- book list ${=B} --depth 10 --source relayer
+# limit order (ask selling held credit):
+npm run cli --silent -- maker make-offer ${=B} --side sell --apr-bps 900 --max-units 50 --out ask.json --publish
+# market orders — ALWAYS dry-run first, then execute the shown plan:
+npm run cli --silent -- trade buy  ${=B} --spend 100 --limit-tick 3900 --source relayer --dry-run
+npm run cli --silent -- trade buy  ${=B} --spend 100 --limit-tick 3900 --source relayer
+npm run cli --silent -- trade sell ${=B} --units 30 --source relayer
+# cancel: on-chain consumption pin is the authority; relayer delisting is best-effort on top
+npm run cli --silent -- order cancel --offer ask.json
+```
+
+- Sweeps execute as one atomic multicall; postconditions require the credit/cash deltas to equal
+  the plan exactly. `--limit-tick` bounds the worst acceptable price; `--exact-spend` refuses
+  partial absorption.
+- Buying DCN can only transfer credit the ask's maker holds — it never creates debt. Selling held
+  credit remains legal at/after maturity, but nothing guarantees bids exist then.
+- **"relayer unavailable — not an empty book" is an error, not an empty market.** Never report a
+  failed book fetch as "no liquidity".
+
+## Interop: Robinhood Agentic Trading MCP
+
+If the session also has Robinhood's official Agentic Trading MCP connected
+(`https://agent.robinhood.com/mcp/trading` — the user's real brokerage: live equity and option
+quotes, positions, order placement), use it as an independent read-only reference only: a real
+NVDA quote cross-checks the mNVDA leg of the pair feed the same way the mainnet-implied mAI price
+calibrated the testnet oracle. Reference data flows one way, into your reasoning. Never place
+brokerage orders, rebalance, or touch the agentic account from a Bivium flow — even when asked
+mid-task, that is a brokerage task the user drives separately. The testnet-only rule is unchanged:
+real-money quotes inform, testnet contracts transact.
+
+## Rules for agents
+
+1. Testnet only. If anything suggests real funds or mainnet, stop and ask.
+2. Keys via `BIVIUM_PK`-style env vars only; never echo them, never pass as arguments.
+3. Preview before spending: `--dry-run` / `quote` first, show the plan, then execute.
+4. Trust the fail-closed errors. The CLI's preflights encode protocol invariants; a blocked command
+   means the state disagrees with your assumption — re-read state (`market state`, `read position`,
+   `offer status`) instead of forcing.
+5. `mock mint` only works for tokens the profile marks `mintable` — that gate is the definition of
+   "this is a valueless test asset", don't try to route around it.
+
+## Troubleshooting
+
+| Symptom | Meaning | Action |
+|---|---|---|
+| `wrong ABI lineage` / `computeId disagrees` | profile ↔ core encoding mismatch | stop; verify profile |
+| `MaturityPassed` | repay/new-debt attempted at/after maturity | repay window is closed; lenders `claim` instead |
+| `OnlyTakerMayBorrow` | an ask tried to originate debt (maker credit short) | check `offer status` / maker `read credit` |
+| `SelfDeal` | taker == maker | use a different account |
+| `units exceed remaining capacity` | offer partly consumed | re-read `offer status`, lower units |
+| `offer commitment mismatch` | offer file tampered or wrong profile domain | reject the file |
+| relayer `ok:false` | discovery layer down, book state unknown | report as outage; optionally `--source files` |
+| all-zero `market state`/`settle status` for a market the relayer lists | the market id hashes all 8 params — a missing `--allow-partial` addresses a different, untouched market | check the relayer row's partial-repay flag and re-run with `--allow-partial` |
+
+Deep reference: `README.md` and `docs/spec/2026-08-09-bivium-cli-spec.md` in this repo; the
+go-to-market rationale (why the strike, not the yield, is the decision) is published at
+https://bivium-robinhood.pages.dev/gtm and the app itself at https://bivium-robinhood.pages.dev.
+An experimental `tbv` command group (whole-vault ERC-1155 collateral) exists
+for local anvil work — read the spec's TBV section before using it.

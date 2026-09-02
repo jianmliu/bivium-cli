@@ -9,3 +9,4 @@ export * from "./plan.ts";
 export * from "./risk.ts";
 export * from "./stress.ts";
 export * from "./attribution.ts";
+export * from "./gather.ts";

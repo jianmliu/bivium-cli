@@ -62,6 +62,16 @@ import {
 } from "../sdk/index.ts";
 import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor, maxSettleableKeptBps, poolKeyFor } from "../sdk/settler.ts";
 import { runStrategyCommand } from "./strategy.ts";
+import {
+  STRATEGIES,
+  catalogJson,
+  gatherStrategyInputs,
+  gatheredToJson,
+  planFromGathered,
+  prepayIsAsset,
+  type GatheredStrategy,
+  type Plan,
+} from "../sdk/index.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
@@ -85,6 +95,10 @@ usage: bivium <command> [options]
   order cancel --offer <file>
   borrow quote --offer <file> [--units <human>]
   borrow execute --offer <file> --units <human> [--receiver <addr>]
+  strategy list                                            # the strategy catalog (what GET /api/strategies serves)
+  strategy quote --strategy <id> --asset <symbol|addr> [--counter <symbol|addr>] --size <human> --maturity <unix> --buffer <pct>
+                 [--apr-bps <n> | --price <wad> | (--source relayer)] [--sigma <annual vol>] [--source chain --from-block N --chunk-blocks N]
+  strategy plan  (same flags) [--router <addr>] [--min-out <human>] [--ttl <s>]   # bounded plan: maxLoss/minOut/deadline; never executes
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
@@ -184,6 +198,16 @@ const OPTIONS = {
   "strategy-id": { type: "string" },
   "quote-id": { type: "string" },
   nonce: { type: "string" },
+  strategy: { type: "string" },
+  asset: { type: "string" },
+  counter: { type: "string" },
+  size: { type: "string" },
+  buffer: { type: "string" },
+  sigma: { type: "string" },
+  price: { type: "string" },
+  router: { type: "string" },
+  "min-out": { type: "string" },
+  "chunk-blocks": { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -1257,6 +1281,33 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { ...tx }, `claimed ${formatAmount(units, loanDecimals)} DCN face: ${tx.hash}`);
   },
 
+  // ── strategies: view → market → the five confirm-screen numbers → a bounded plan ─────────────
+  // The engine (src/sdk/strategies) is pure; this layer only gathers inputs: discovered markets,
+  // the pair feed's spot, and a fill price (an explicit rate, or the live book's best bid/ask).
+
+  "strategy list": async (ctx) => {
+    const lines = STRATEGIES.map((s) =>
+      `${s.id.padEnd(14)} ${s.name.padEnd(10)} ${s.group.padEnd(10)} ${s.side}/${s.line.padEnd(8)} ${s.quotable ? "quotable" : s.requires.length ? "needs " + s.requires.join("+") + " (declared)" : "2 legs, orchestrate separately (declared)"}${s.mirrorOf ? `  mirror: ${s.mirrorOf}` : ""}\n    ${s.oneLiner}`,
+    );
+    output(ctx.json, { count: STRATEGIES.length, strategies: catalogJson() as unknown as Record<string, unknown>[] }, lines.join("\n"));
+  },
+
+  "strategy quote": async (ctx) => {
+    const g = await gatherStrategy(ctx);
+    output(ctx.json, gatheredToJson(g), renderStrategyQuote(ctx, g));
+  },
+
+  "strategy plan": async (ctx) => {
+    const g = await gatherStrategy(ctx);
+    const v = ctx.values;
+    const plan = planFromGathered(ctx.profile, g, {
+      router: typeof v.router === "string" ? (getAddress(v.router) as Address) : undefined,
+      minOut: typeof v["min-out"] === "string" ? v["min-out"] : undefined,
+      ttlSeconds: typeof v.ttl === "string" ? BigInt(v.ttl) : undefined,
+    });
+    output(ctx.json, { ...gatheredToJson(g), plan: plan as unknown as Record<string, unknown> }, [renderStrategyQuote(ctx, g), "", ...renderStrategyPlan(g, plan)].join("\n"));
+  },
+
   "vault activate": async (ctx) => {
     const sats = rawBigInt(ctx.values.sats as string | undefined, "sats");
     const vaultId = typeof ctx.values["vault-id"] === "string"
@@ -1576,6 +1627,108 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, { ...tx }, `minted ${formatAmount(amount, token.info.decimals)} ${token.symbol ?? token.address} to ${to}: ${tx.hash}`);
   },
 };
+
+// ───────────────────────── strategy helpers ─────────────────────────
+// Input gathering lives in the SDK (src/sdk/strategies/gather.ts) and is shared with the MCP server;
+// this layer only maps flags → GatherRequest and renders.
+
+/** formatAmount is unsigned; P&L figures carry a sign. */
+function signedAmount(x: bigint, decimals: number): string {
+  return x < 0n ? `-${formatAmount(-x, decimals)}` : formatAmount(x, decimals);
+}
+
+function symbolMap(ctx: Ctx): Map<string, { sym: string; dec: number }> {
+  return new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
+}
+
+async function gatherStrategy(ctx: Ctx): Promise<GatheredStrategy> {
+  const v = ctx.values;
+  const source = typeof v.source === "string" ? v.source : undefined;
+  if (source !== undefined && source !== "relayer" && source !== "chain" && source !== "files") fail("--source must be relayer, chain, or files");
+  const priceWad = typeof v.price === "string" ? (/^\d+$/.test(v.price) ? BigInt(v.price) : fail("--price must be a WAD integer (1e18 = par)")) : undefined;
+  const aprBps = typeof v["apr-bps"] === "string" ? BigInt(v["apr-bps"]) : undefined;
+  const sigmaAnnual = typeof v.sigma === "string" ? Number(v.sigma) : undefined;
+  return await gatherStrategyInputs(ctx.profile, client(ctx, false), {
+    strategy: need(v.strategy as string | undefined, "strategy"),
+    asset: need(v.asset as string | undefined, "asset"),
+    counter: typeof v.counter === "string" ? v.counter : undefined,
+    size: need(v.size as string | undefined, "size"),
+    maturity: BigInt(need(v.maturity as string | undefined, "maturity")),
+    bufferPct: Number(need(v.buffer as string | undefined, "buffer")),
+    priceWad,
+    aprBps,
+    sigmaAnnual,
+    // `files` is a CLI-only book source (signed-offer files in --dir); chain/relayer discovery is the SDK's.
+    market: {
+      source: source === "files" ? undefined : source,
+      fromBlock: typeof v["from-block"] === "string" ? BigInt(v["from-block"]) : undefined,
+      chunkSize: typeof v["chunk-blocks"] === "string" ? BigInt(v["chunk-blocks"]) : undefined,
+    },
+    book: (params) => loadBookEntries(ctx, params),
+  });
+}
+
+function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
+  const { res, quote } = g;
+  const by = symbolMap(ctx);
+  const sym = (a: Address): string => by.get(a.toLowerCase())?.sym ?? a.slice(0, 8);
+  const A = sym(res.asset);
+  const N = sym(res.numeraire);
+  // Prices are advisory floats from the pair feed, so trim their display to 8 decimals; amounts stay exact.
+  const px = (p: bigint): string => formatAmount(p, 18).replace(/(\.\d{8})\d+$/, "$1");
+  const num = (x: bigint): string => `${signedAmount(x, res.numeraireDecimals)} ${N}`;
+  const prepayDec = prepayIsAsset(res.strategy.id) ? res.assetDecimals : res.numeraireDecimals;
+  const prepaySym = prepayIsAsset(res.strategy.id) ? A : N;
+  const term = res.row.market.params.maturity - g.now;
+  const apr = Number(simpleAprBpsFromPrice(g.priceWad, term)) / 100;
+  const w = quote.payoff.worstCase;
+  const lines = [
+    `${res.strategy.name} (${res.strategy.id}) — ${res.side} on the ${res.line} line: ${res.strategy.oneLiner}`,
+    `  market:     ${A}/${N}  K = ${px(res.strikeHuman)} ${N} per ${A}  (${res.realizedBufferPct >= 0 ? "+" : ""}${res.realizedBufferPct.toFixed(1)}% ${res.strategy.otmDirection === "above" ? "above" : "below"} spot)  maturity ${res.row.market.params.maturity} (${term / 86_400n}d)`,
+    `  spot:       ${px(g.spot)} ${N} per ${A}  [${g.pair}${g.spotStatus === "stale" ? ", STALE" : ""}]  — estimates below are off this spot; execution is bounded by minOut`,
+    `  price:      ${px(g.priceWad)} (simple APR ${apr.toFixed(2)}%)  from ${g.priceFrom}`,
+    `  size:       ${formatAmount(g.size, res.strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals)} ${res.strategy.id === "lendQuote" ? N : A}`,
+    `  prepay:     ${formatAmount(quote.prepay, prepayDec)} ${prepaySym}   premium: ${num(quote.premium)}`,
+    `  WORST CASE: ${num(w.amount)}  when ${w.at}  — form: ${w.form}`,
+    `  best case:  ${num(quote.payoff.bestCase.amount)}  when ${quote.payoff.bestCase.at}`,
+    `  break-even: ${quote.payoff.breakEven === null ? "—" : `${px(quote.payoff.breakEven)} ${N} per ${A}`}`,
+    `  boundary:   ${px(quote.payoff.boundary)} ${N} per ${A}  (${{ "forfeit-collateral": "forfeit above", "deliver-collateral": "deliver below", "called-away": "called away above", assigned: "assigned below", premium: "delivery point" }[w.form]})`,
+    `  P(exercise): ${quote.exerciseProbability === null ? "— (pass --sigma <annual vol>)" : `${(quote.exerciseProbability * 100).toFixed(0)}%${g.sigmaSource === "feed" ? " (σ from the pair feed)" : ""}`}`,
+  ];
+  if (res.alternatives.length) {
+    lines.push(`  note: no rung within tolerance of --buffer; nearest rungs: ${res.alternatives.map((r) => r.market.id.slice(0, 10)).join(", ")} (this quote uses the nearest)`);
+  }
+  // A compact payoff table: ~9 evenly spaced samples of the curve.
+  const pts = quote.payoff.points;
+  const step = Math.max(1, Math.floor(pts.length / 8));
+  lines.push("  payoff at maturity (S_T → P&L):");
+  for (let i = 0; i < pts.length; i += step) {
+    const p = pts[i]!;
+    lines.push(`    ${px(p.S).padEnd(24)} ${p.pnl >= 0n ? "+" : ""}${signedAmount(p.pnl, res.numeraireDecimals)} ${N}`);
+  }
+  return lines.join("\n");
+}
+
+function renderStrategyPlan(g: GatheredStrategy, plan: Plan): string[] {
+  const { res } = g;
+  const lines = [
+    `plan: ${plan.mode}${plan.mode === "sequential" ? "  ⚠ NOT atomic (no Router on this profile): approve → fill → swap are separate txs" : plan.mode === "intent" ? "  (single leg — signable intent)" : "  (one atomic Router call)"}`,
+    `  maxLoss ${formatAmount(plan.limits.maxLoss, res.numeraireDecimals)}  minOut ${plan.limits.minOut === undefined ? "—" : plan.limits.minOut.toString()}  deadline ${plan.limits.deadline}  quoteId ${plan.quoteId.slice(0, 18)}…`,
+  ];
+  plan.steps.forEach((s, i) => {
+    const bits = [
+      s.token ? `token ${s.token.slice(0, 10)}` : "",
+      s.spender ? `spender ${s.spender.slice(0, 10)}` : "",
+      s.amount !== undefined ? `amount ${s.amount}` : "",
+      s.units !== undefined ? `units ${s.units}` : "",
+      s.minOut !== undefined ? `minOut ${s.minOut}` : "",
+      s.offer ? `offer tick ${s.offer.tick}` : "",
+    ].filter(Boolean).join("  ");
+    lines.push(`  ${i + 1}. ${s.kind.padEnd(19)} ${bits}${bits ? "  " : ""}— ${s.note}`);
+  });
+  lines.push("  (nothing was sent: execute the steps with the existing commands, or hand the plan to the Router)");
+  return lines;
+}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);

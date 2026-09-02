@@ -4,9 +4,12 @@
 //
 // Core `fill` semantics this client mirrors (src/Bivium.sol `_fill`/`_moveClaim`):
 // - ASK fill (offer.buy=false): the taker is the buyer; cost = ceil(units·price/WAD) pulled live
-//   from the taker. The maker is the seller and can only TRANSFER existing credit — a resting ask
-//   whose maker credit would cross zero reverts OnlyTakerMayBorrow, so we precheck
-//   `creditOf(maker) ≥ planned units` per maker.
+//   from the taker. The maker is the seller: it TRANSFERS the credit it holds, and — since
+//   bivium-core #171 — ORIGINATES the rest against collateral it escrowed (`escrowCollateral`), so
+//   a resting ask is also a resting borrow order. We precheck per maker that the units beyond its
+//   credit are covered: ceil(issued·STRIKE_SCALE/strike) ≤ collateralEscrowOf(maker), and that
+//   issuance is still open (now < maturity). A core without the escrow surface answers no escrow,
+//   which collapses to the pre-#171 rule `creditOf(maker) ≥ units` (OnlyTakerMayBorrow otherwise).
 // - BID fill (offer.buy=true): the taker is the seller; proceeds = floor(units·price/WAD) drawn
 //   from the maker's pre-funded liquidity. Selling EXISTING credit is a pure secondary transfer
 //   and stays legal at/after maturity (`MaturityPassed` only guards new issuance) — we therefore
@@ -29,9 +32,21 @@ import {
   type Side,
   type SweepTake,
 } from "./orderbook.ts";
+import { collateralForDebt } from "./math.ts";
 import { RATIFIED } from "./ratify.ts";
 import { cancelMessage, deleteSignedOffer, requireRelayerV2 } from "./relayer.ts";
 import type { DeploymentProfile, Hex } from "./types.ts";
+
+/**
+ * Collateral a resting ask's maker is short of for `units`: what core would lock for the units beyond the maker's
+ * credit (`ceil(issued·STRIKE_SCALE/strike)`, its `_mulDivUp`) minus what it escrowed. Zero means the fill clears.
+ */
+export function askBackingShortfall(args: { units: bigint; credit: bigint; escrow: bigint; strike: bigint }): bigint {
+  const issued = args.units > args.credit ? args.units - args.credit : 0n;
+  if (issued === 0n) return 0n;
+  const locked = collateralForDebt(issued, args.strike);
+  return locked > args.escrow ? locked - args.escrow : 0n;
+}
 
 export interface TradePlanRequest {
   units?: bigint;
@@ -179,13 +194,25 @@ export class TradeClient extends BiviumClient {
     }
 
     if (plan.side === "ask") {
-      // Buying resting asks: each maker must HOLD the credit it is selling (pure transfer only).
+      // Buying resting asks: each maker transfers the credit it holds and originates the rest against its escrow.
+      const strike = plan.takes[0].entry.offer.strike;
+      const maturity = plan.takes[0].entry.offer.maturity;
       const perMaker = new Map<string, bigint>();
       for (const t of plan.takes) perMaker.set(t.entry.maker, (perMaker.get(t.entry.maker) ?? 0n) + t.units);
       for (const [maker, units] of perMaker) {
         const credit = await this.creditOf(marketId, maker as Hex);
-        if (credit < units) {
-          throw new Error(`maker ${maker} holds ${credit} credit but the plan takes ${units} — ask fill would revert (OnlyTakerMayBorrow)`);
+        if (credit >= units) continue;
+        const escrow = await this.collateralEscrowOf(marketId, maker as Hex).catch(() => 0n);
+        const shortfall = askBackingShortfall({ units, credit, escrow, strike });
+        if (shortfall > 0n) {
+          throw new Error(
+            escrow === 0n
+              ? `maker ${maker} holds ${credit} credit and no escrowed collateral but the plan takes ${units} — ask fill would revert (OnlyTakerMayBorrow)`
+              : `maker ${maker} holds ${credit} credit and ${escrow} escrowed collateral, short ${shortfall} collateral for the ${units - credit} units it would originate — ask fill would revert (InsufficientCollateralEscrow)`,
+          );
+        }
+        if (now >= maturity) {
+          throw new Error(`maker ${maker} would originate ${units - credit} units but the market matured — fill would revert (MaturityPassed)`);
         }
       }
     } else {

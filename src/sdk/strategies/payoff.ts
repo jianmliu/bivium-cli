@@ -98,6 +98,7 @@ export function borrowSellPayoff(i: BorrowSellInputs): BorrowSellResult {
     worstCase: { amount: -prepay, at: "S_T ≥ K", form: "forfeit-collateral" },
     bestCase: { amount: sold, at: "S_T → 0" },
     breakEven,
+    boundary: forfeitAbove,
   };
   return { received, sold, collateral, premium, prepay, forfeitAbove, payoff };
 }
@@ -152,9 +153,10 @@ export function leveredLongPayoff(i: LeveredLongInputs): LeveredLongResult {
   const ceiling = ceilingFor(i.spot, deliverBelow);
   const payoff: Payoff = {
     points: samplePayoff(pnl, [i.spot, deliverBelow, breakEven], ceiling),
-    worstCase: { amount: -stake, at: "S_T < K", form: "deliver-collateral" },
-    bestCase: { amount: pnl(ceiling), at: `S_T = ${ceiling.toString()} (plot edge; unbounded above)` },
+    worstCase: { amount: -stake, at: "S_T below the delivery point (face ÷ total collateral; equals K only at max LTV)", form: "deliver-collateral" },
+    bestCase: { amount: pnl(ceiling), at: "unbounded above (value at the plot edge, 2.5x max(spot, K))" },
     breakEven,
+    boundary: deliverBelow,
   };
   return { received, bought, collateralTotal, required, topUp, premium, stake, deliverBelow, payoff };
 }
@@ -196,9 +198,10 @@ export function protectivePutPayoff(i: ProtectivePutInputs): ProtectivePutResult
   const ceiling = ceilingFor(i.spot, deliverBelow);
   const payoff: Payoff = {
     points: samplePayoff(pnl, [i.spot, deliverBelow, breakEven], ceiling),
-    worstCase: { amount: received - stake, at: "S_T ≤ K (floor locked by delivering at K)", form: "deliver-collateral" },
-    bestCase: { amount: pnl(ceiling), at: `S_T = ${ceiling.toString()} (plot edge; unbounded above)` },
+    worstCase: { amount: received - stake, at: "S_T at/below the delivery point (face ÷ holding; equals K when borrowing the max)", form: "deliver-collateral" },
+    bestCase: { amount: pnl(ceiling), at: "unbounded above (value at the plot edge, 2.5x max(spot, K))" },
     breakEven,
+    boundary: deliverBelow,
   };
   return { borrowFace, received, premium, stake, deliverBelow, payoff };
 }
@@ -246,6 +249,7 @@ export function lendAssetPayoff(i: LendAssetInputs): LendAssetResult {
     worstCase: { amount: collateral - stake, at: "S_T ≥ K: gain capped, upside above K goes to the borrower", form: "called-away" },
     bestCase: { amount: collateral - stake, at: "S_T ≥ K" },
     breakEven,
+    boundary: calledAwayAbove,
   };
   return { lent, premiumAsset, premium, collateral, stake, calledAwayAbove, payoff };
 }
@@ -286,6 +290,7 @@ export function lendQuotePayoff(i: LendQuoteInputs): LendQuoteResult {
     worstCase: { amount: -lent, at: "S_T → 0 after being assigned at K", form: "assigned" },
     bestCase: { amount: premium, at: "S_T ≥ K" },
     breakEven,
+    boundary: assignedBelow,
   };
   return { lent, premium, collateral, assignedBelow, payoff };
 }

@@ -1,9 +1,9 @@
 {
-  "name": "robinhood-testnet",
+  "name": "robinhood-testnet-core1",
   "abiProfile": "core-v2",
   "chainId": 46630,
-  "core": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
-  "signatureRatifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+  "core": "0x8943085a473BD89db8b1deB6ca3dc40a9d4CD592",
+  "signatureRatifier": "0x3E60f47BA1d4dE695434e879300914584C851F90",
   "rpcUrl": "https://rpc.testnet.chain.robinhood.com",
   "tokens": {
     "bUSD": {
@@ -37,10 +37,10 @@
       "mintable": true
     }
   },
-  "coreDeploymentBlock": 111752575,
+  "coreDeploymentBlock": 108911617,
   "relayerUrl": "https://bivium-robinhood.pages.dev/api",
   "gasApi": "https://bivium-robinhood.pages.dev/api/gas",
   "gasFaucet": "0xb33cD742775d3c5f6a7D35D2d41178A31F2a48b3",
-  "maturitySettler": "0xED91b873E58472380D9df46cEAf7060C707B707D",
-  "v4JitKeeper": "0x2ac71B3673220192E3923843A19F9CAc995063E9"
+  "maturitySettler": "0xF10E433CA5f0bff5661353587BF4E62A51267542",
+  "v4JitKeeper": "0x86FF1A963F4C521d6FeB471a2cFEeF09c6f99B84"
 }
