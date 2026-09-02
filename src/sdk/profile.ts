@@ -61,6 +61,9 @@ export function loadProfile(path: string): DeploymentProfile {
   if (raw.maturitySettler !== undefined && (typeof raw.maturitySettler !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.maturitySettler))) {
     throw new Error("profile maturitySettler must be an address");
   }
+  if (raw.v4JitKeeper !== undefined && (typeof raw.v4JitKeeper !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.v4JitKeeper))) {
+    throw new Error("profile v4JitKeeper must be an address");
+  }
   if (raw.coreDeploymentBlock !== undefined && (typeof raw.coreDeploymentBlock !== "number" || !Number.isInteger(raw.coreDeploymentBlock) || raw.coreDeploymentBlock < 0)) {
     throw new Error("profile coreDeploymentBlock must be a non-negative integer");
   }
@@ -77,6 +80,7 @@ export function loadProfile(path: string): DeploymentProfile {
     gasFaucet,
     gasApi: raw.gasApi as string | undefined,
     maturitySettler: raw.maturitySettler as Address | undefined,
+    v4JitKeeper: raw.v4JitKeeper as Address | undefined,
     coreDeploymentBlock: raw.coreDeploymentBlock as number | undefined,
   };
 }

@@ -19,6 +19,22 @@ export const settlerAbi = parseAbi([
   "function SETTLE_WINDOW() view returns (uint256)",
 ]);
 
+// V4JitKeeper (bivium-core #170): the same settle, funded by a Uniswap v4 pool's flash accounting instead of the
+// caller's wallet. The wrapper is the settler's keeper; the caller only signs and collects the surplus, so no
+// balance and no approval are required — an unprofitable settle reverts whole instead of costing anything.
+export const jitKeeperAbi = parseAbi([
+  "function settleWithFlash((uint256 chainId,address bivium,address loanToken,address collateralToken,uint256 maturity,uint256 strike,bool allowPartialRepay,address gate) params, address borrower, uint256 collateralAsk, (address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key, uint256 minProfit) returns (uint256)",
+]);
+
+export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+
+/** A v4 pool key holds the SORTED pair; which market leg is currency0 is byte order, not a choice. */
+export function poolKeyFor(collateralToken: Address, loanToken: Address, fee: number, tickSpacing: number, hooks: Address): PoolKey {
+  const [currency0, currency1] = collateralToken.toLowerCase() < loanToken.toLowerCase()
+    ? [collateralToken, loanToken] : [loanToken, collateralToken];
+  return { currency0, currency1, fee, tickSpacing, hooks };
+}
+
 const grantAbi = parseAbi([
   "function grantOf(address authorizer, address authorized) view returns (uint256 capabilities, uint256 expiry)",
   "function grantAuthorization(address authorized, uint256 capabilities, uint256 expiry)",
@@ -83,5 +99,11 @@ export class SettlerClient extends BiviumClient {
   /** Keeper-side: fund and execute one settlement. The caller must hold and approve the loan token. */
   settle(params: MarketParams, borrower: Address, collateralAsk: bigint) {
     return this.write({ address: this.settler, abi: settlerAbi, functionName: "settle", args: [this.fullParams(params), borrower, collateralAsk] });
+  }
+
+  /** Keeper-side, zero-capital: the V4JitKeeper takes the debt from the pool's flash accounting, settles, swaps
+   *  the collateral back through the same pool and sends the surplus to the caller. No funds, no approvals. */
+  settleWithFlash(jit: Address, params: MarketParams, borrower: Address, collateralAsk: bigint, key: PoolKey, minProfit: bigint) {
+    return this.write({ address: jit, abi: jitKeeperAbi, functionName: "settleWithFlash", args: [this.fullParams(params), borrower, collateralAsk, key, minProfit] });
   }
 }

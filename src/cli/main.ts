@@ -60,7 +60,7 @@ import {
   type MarketParams,
   type Offer,
 } from "../sdk/index.ts";
-import { SettlerClient, grantCoversSettler, maxSettleableFloor } from "../sdk/settler.ts";
+import { SettlerClient, grantCoversSettler, maxSettleableFloor, poolKeyFor } from "../sdk/settler.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
@@ -91,6 +91,7 @@ usage: bivium <command> [options]
   settle disarm (market flags | --offer <file>)
   settle status (market flags | --offer <file>) [--borrower <addr>]        # floor, cap now, settleable bound
   settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay
+    [--via-jit [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]]  # zero-capital via v4 flash
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
@@ -149,6 +150,11 @@ const OPTIONS = {
   "acknowledge-itm": { type: "boolean", default: false },
   borrower: { type: "string" },
   ask: { type: "string" },
+  "via-jit": { type: "boolean" },
+  "min-profit": { type: "string" },
+  "pool-fee": { type: "string" },
+  "pool-spacing": { type: "string" },
+  "pool-hooks": { type: "string" },
   "vault-id": { type: "string" },
   depositor: { type: "string" },
   sats: { type: "string" },
@@ -879,6 +885,22 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const ask = typeof ctx.values.ask === "string"
       ? parseAmount(ctx.values.ask, market.collateralDecimals)
       : await sc.maxAsk(freed, market.params.maturity, auth.minCollateralKept);
+    if (ctx.values["via-jit"]) {
+      // Zero-capital route: the V4JitKeeper funds the repay from a v4 pool's flash accounting and pays this
+      // wallet the surplus. Nothing to hold, nothing to approve — an unprofitable settle reverts whole.
+      const jit = ctx.profile.v4JitKeeper ?? fail("profile has no v4JitKeeper for this chain");
+      const minProfit = typeof ctx.values["min-profit"] === "string"
+        ? parseAmount(ctx.values["min-profit"], market.loanDecimals) : 0n;
+      const key = poolKeyFor(
+        market.params.collateralToken, market.params.loanToken,
+        Number(ctx.values["pool-fee"] ?? 3000), Number(ctx.values["pool-spacing"] ?? 60),
+        getAddress((ctx.values["pool-hooks"] as string | undefined) ?? "0x0000000000000000000000000000000000000000") as Address,
+      );
+      const tx = await sc.settleWithFlash(jit, market.params, borrower, ask, key, minProfit);
+      output(ctx.json, { settled: true, viaJit: true, repaid: formatAmount(position.debt, market.loanDecimals), ask: formatAmount(ask, market.collateralDecimals), tx: tx.hash },
+        `settled via v4 flash: repaid ${formatAmount(position.debt, market.loanDecimals)} loan with the pool's money, ask ${formatAmount(ask, market.collateralDecimals)} collateral, surplus to this wallet (${tx.hash})`);
+      return;
+    }
     // The keeper fronts the whole debt: approve exactly it, then settle.
     await sc.approveExact(market.params.loanToken, settler, position.debt);
     const tx = await sc.settle(market.params, borrower, ask);
