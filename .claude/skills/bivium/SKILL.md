@@ -188,7 +188,7 @@ has it): in the final 6h window a keeper repays for them under a Dutch-auction f
 leaving them below a floor they chose.
 
 ```bash
-npm run cli --silent -- settle arm ${=B} --floor 0.09        # one-time core grant + per-market arm
+npm run cli --silent -- settle arm ${=B} --keep 90           # one-time core grant + per-market arm: keep >= 90% of what settles
 npm run cli --silent -- settle status ${=B} --borrower <addr>
 npm run cli --silent -- settle disarm ${=B}
 # keeper-side (fund the repay yourself, take the Dutch cap unless --ask):
@@ -198,14 +198,19 @@ npm run cli --silent -- settle execute ${=B} --borrower <addr>
 npm run cli --silent -- settle execute ${=B} --borrower <addr> --via-jit --min-profit 0.5
 ```
 
-The floor is BOTH the borrower's protection and the keeper's budget: settlement is reachable only
-while `floor < collateral − debt/R`. `settle status` prints that bound — **a floor above it arms
-nothing** (no keeper can ever profit), so always read the bound before choosing a floor, and treat
-"settleable floor bound ~0" as the position being underwater: walking away is then the rational
-branch and arming cannot help. Delivery is a legitimate election — a borrower who WANTS to be
-assigned simply never arms. `settle execute` fronts the whole debt from the caller's wallet
-(keeper profit = ask×R − debt); it approves exactly the debt and defaults the ask to the current
-Dutch cap.
+The floor is a SHARE — `--keep <percent>` of the collateral a settlement unlocks that must come back
+to the borrower — so it needs no re-arming when the position grows, shrinks, or is settled in
+slices; 100% is refused. Collateral the borrower already freed (`withdrawable`) is forwarded
+untouched and is never part of the keeper's budget. The share is BOTH the borrower's protection
+and the keeper's budget: settlement is reachable only while `keep% × locked < locked − debt/R`.
+`settle status` prints that bound as a percentage — **a share above it arms nothing** (no keeper
+can ever profit), so always read the bound before choosing one, and treat "settleable bound ~0" as
+the position being underwater: walking away is then the rational branch and arming cannot help.
+Delivery is a legitimate election — a borrower who WANTS to be assigned simply never arms.
+`settle execute` fronts the debt it reads and NAMES that size on-chain (keeper profit = ask×R −
+debt): it approves exactly the debt and defaults the ask to the current Dutch cap; if the debt moves
+before the transaction lands, a repay-in-full market refuses and a partial-repay market settles
+exactly the named slice, so the keeper never advances more than it priced.
 
 ## Workflow: trade DCN (交易挂单)
 
