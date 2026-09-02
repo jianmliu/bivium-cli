@@ -24,6 +24,7 @@ import {
   type BookLoader,
 } from "../sdk/strategies/index.ts";
 import { classifyLine, humanStrike } from "../sdk/strategies/lines.ts";
+import { fetchStrategyPositions, type HttpPositionsResult, type HttpQuoteLoader } from "../sdk/strategies/http.ts";
 import type { DeploymentProfile } from "../sdk/types.ts";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -53,7 +54,7 @@ export interface McpDeps {
   profile: DeploymentProfile;
   client?: BiviumClient;
   /** Pre-fetched rows / spot / book — tests, or a host that already holds them. */
-  overrides?: { rows?: PoolRow[]; spot?: SpotRef; book?: BookLoader };
+  overrides?: { rows?: PoolRow[]; spot?: SpotRef; book?: BookLoader; parity?: HttpQuoteLoader | false; positions?: (taker: string) => Promise<HttpPositionsResult> };
   now?: () => bigint;
 }
 
@@ -106,6 +107,11 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "strategy_positions",
+    description: "An account's holdings read as strategies (from the app's /api/strategies/positions): candidate kinds per position, the two roads at maturity priced against each other, lender outcome, 48h urgency, auto-settle arm state, and the exact core action that exits. Read-only.",
+    inputSchema: { type: "object", properties: { taker: { type: "string", description: "the account address" } }, required: ["taker"] },
+  },
 ];
 
 function str(v: unknown): string | undefined {
@@ -150,6 +156,7 @@ function gatherRequestFrom(args: Record<string, unknown>, deps: McpDeps): Gather
     rows: deps.overrides?.rows,
     spot: deps.overrides?.spot,
     book: deps.overrides?.book,
+    parity: deps.overrides?.parity,
   };
 }
 
@@ -193,6 +200,13 @@ export function createStrategyMcp(deps: McpDeps) {
           ttlSeconds: big(args.ttlSeconds, "ttlSeconds"),
         });
         return { ...gatheredToJson(g), plan };
+      }
+      case "strategy_positions": {
+        const taker = str(args.taker);
+        if (!taker) throw new Error("taker is required");
+        const result = await (deps.overrides?.positions ?? ((t: string) => fetchStrategyPositions(profile.relayerUrl, t)))(taker);
+        if (!result.ok) throw new Error(`positions unavailable — not an empty account: ${result.reason}`);
+        return result;
       }
       default:
         throw new Error(`unknown tool ${JSON.stringify(name)}`);

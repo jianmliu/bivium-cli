@@ -60,6 +60,7 @@ import {
   type MarketParams,
   type Offer,
 } from "../sdk/index.ts";
+import { fetchStrategyPositions } from "../sdk/strategies/http.ts";
 import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor, maxSettleableKeptBps, poolKeyFor } from "../sdk/settler.ts";
 import { runStrategyCommand } from "./strategy.ts";
 import {
@@ -99,6 +100,7 @@ usage: bivium <command> [options]
   strategy quote --strategy <id> --asset <symbol|addr> [--counter <symbol|addr>] --size <human> --maturity <unix> --buffer <pct>
                  [--apr-bps <n> | --price <wad> | (--source relayer)] [--sigma <annual vol>] [--source chain --from-block N --chunk-blocks N]
   strategy plan  (same flags) [--router <addr>] [--min-out <human>] [--ttl <s>]   # bounded plan: maxLoss/minOut/deadline; never executes
+  strategy positions --taker <addr>          # holdings read as strategies, from the app's /api/strategies/positions
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
   claim (--offer <file> | market flags) --units <human> [--receiver <addr>]
@@ -168,6 +170,7 @@ const OPTIONS = {
   "from-block": { type: "string" },
   "acknowledge-itm": { type: "boolean", default: false },
   borrower: { type: "string" },
+  taker: { type: "string" },
   keep: { type: "string" },
   ask: { type: "string" },
   "via-jit": { type: "boolean" },
@@ -1307,6 +1310,20 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     output(ctx.json, gatheredToJson(g), renderStrategyQuote(ctx, g));
   },
 
+  "strategy positions": async (ctx) => {
+    const taker = getAddress(need(ctx.values.taker as string | undefined, "taker")) as Address;
+    const result = await fetchStrategyPositions(ctx.profile.relayerUrl, taker);
+    if (!result.ok) fail(`positions unavailable — not an empty account: ${result.reason}`);
+    const lines = result.positions.length === 0
+      ? [`no positions for ${taker} across ${result.marketsScanned} listed markets`]
+      : result.positions.map((p) => {
+        const road = p.branches ? ` | maturity: ${p.branches.better} wins by ${p.branches.netFromRepaying.toFixed(4)} loan` : p.lenderOutcome ? ` | likely ${p.lenderOutcome}` : "";
+        const arm = p.autoSettle ? ` | auto-settle ${p.autoSettle.armed ? `armed keep ${(p.autoSettle.keepBps / 100).toFixed(1)}%` : "off"}` : "";
+        return `${p.urgent ? "⚠ " : ""}${p.key}  ${p.side}${p.kinds.length ? ` (${p.kinds.join(" | ")})` : ""}  debt ${p.debt} coll ${p.collateral} credit ${p.credit} liq ${p.liquidity}${p.bufferPct === undefined ? "" : ` | buffer ${p.bufferPct.toFixed(1)}%`}${road}${arm}\n    exit: ${p.exit.action} — ${p.exit.note}`;
+      });
+    output(ctx.json, result as unknown as Record<string, unknown>, lines.join("\n"));
+  },
+
   "strategy plan": async (ctx) => {
     const g = await gatherStrategy(ctx);
     const v = ctx.values;
@@ -1679,6 +1696,11 @@ async function gatherStrategy(ctx: Ctx): Promise<GatheredStrategy> {
 }
 
 function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
+  const parityLine = ((p: GatheredStrategy["parity"]): string => {
+    if (p.status === "ok") return "  parity:     the app's quote agrees (POST /api/strategies/quote)";
+    if (p.status === "mismatch") return `  parity:     MISMATCH with the app's quote — ${p.checks.filter((c) => !c.ok).map((c) => `${c.field} local ${c.local} vs app ${c.http}`).join("; ")} — do not trust either number until this is understood`;
+    return `  parity:     ${p.status} (${"reason" in p ? p.reason : ""})`;
+  })(g.parity);
   const { res, quote } = g;
   const by = symbolMap(ctx);
   const sym = (a: Address): string => by.get(a.toLowerCase())?.sym ?? a.slice(0, 8);
@@ -1704,6 +1726,7 @@ function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
     `  break-even: ${quote.payoff.breakEven === null ? "—" : `${px(quote.payoff.breakEven)} ${N} per ${A}`}`,
     `  boundary:   ${px(quote.payoff.boundary)} ${N} per ${A}  (${{ "forfeit-collateral": "forfeit above", "deliver-collateral": "deliver below", "called-away": "called away above", assigned: "assigned below", premium: "delivery point" }[w.form]})`,
     `  P(exercise): ${quote.exerciseProbability === null ? "— (pass --sigma <annual vol>)" : `${(quote.exerciseProbability * 100).toFixed(0)}%${g.sigmaSource === "feed" ? " (σ from the pair feed)" : ""}`}`,
+    parityLine,
   ];
   if (res.alternatives.length) {
     lines.push(`  note: no rung within tolerance of --buffer; nearest rungs: ${res.alternatives.map((r) => r.market.id.slice(0, 10)).join(", ")} (this quote uses the nearest)`);
