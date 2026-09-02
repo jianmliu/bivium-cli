@@ -48,6 +48,10 @@ export interface InputField {
 
 export interface StrategyDef {
   id: string;
+  /** True only for products exposed in the first Robinhood release. */
+  initialRelease: boolean;
+  /** User-facing labels for the distinct maturity outcomes. */
+  outcomeLabels: readonly string[];
   /** User-facing name (zh) and one-liner. */
   name: string;
   oneLiner: string;
@@ -158,6 +162,16 @@ export interface StrategyQuote {
   estimateBasis: "spot";
 }
 
+/** Reporting metadata that follows a strategy from quote through execution. */
+export interface StrategyTrace {
+  strategyId: string;
+  account: Address;
+  quoteId: Hex;
+  intentId: Hex;
+  orderId?: Hex;
+  fillId?: Hex;
+}
+
 export interface PlanLimits {
   /** Hard cap on what the user can lose: exceeding it reverts on-chain (Router) or aborts (sequential). */
   maxLoss: bigint;
@@ -188,10 +202,84 @@ export interface Plan {
    */
   mode: "intent" | "router" | "sequential";
   strategyId: string;
+  marketId: Hex;
+  riskDecision: RiskDecision | "not_evaluated";
+  riskWarnings: string[];
   steps: PlanStep[];
   limits: PlanLimits;
   worstCase: bigint;
   prepay: bigint;
   quoteId: Hex;
   validUntil: bigint;
+}
+
+/** Whether a risk datum was seen, unavailable, or does not apply to this collateral. */
+export type EvidenceState = "observed" | "warning" | "unknown" | "not_applicable";
+export type CollateralKind = "stock-token" | "ai-token" | "meme" | "other";
+export type RiskDecision = "accept" | "reject" | "require_user_confirmation";
+
+export interface RiskEvidence<T> {
+  state: EvidenceState;
+  value?: T;
+  source?: string;
+  observedAt?: string;
+}
+
+export interface RiskWarning {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  message: string;
+}
+
+export interface AgentRiskPolicy {
+  rejectArbitraryMint: boolean;
+  rejectUnsellable: boolean;
+  confirmOnUnknown: boolean;
+  maxTop10HolderPct?: number;
+  maxExitSlippageBps?: number;
+}
+
+export type MarketRiskEvidenceKey = "mintable" | "freezable" | "blacklistable" | "upgradeable"
+  | "sellability" | "top10HolderPct" | "exitSlippageBps" | "referencePrice";
+
+export interface MarketRiskEvidenceValue {
+  mintable: boolean;
+  freezable: boolean;
+  blacklistable: boolean;
+  upgradeable: boolean;
+  sellability: boolean;
+  top10HolderPct: number;
+  exitSlippageBps: number;
+  referencePrice: number;
+}
+
+export type MarketRiskEvidence = {
+  [K in MarketRiskEvidenceKey]: RiskEvidence<MarketRiskEvidenceValue[K]>;
+};
+
+export interface SelectedRiskPolicy {
+  source: "user-policy" | "agent-policy";
+  rules: AgentRiskPolicy;
+}
+
+export interface MarketRiskInput {
+  market: Hex;
+  collateralKind: CollateralKind;
+  evidence: Partial<MarketRiskEvidence>;
+}
+
+export interface MarketRiskReport {
+  market: Hex;
+  facts: Array<{ key: string; value: unknown; source?: string; observedAt?: string }>;
+  warnings: RiskWarning[];
+  unknowns: string[];
+  decision: RiskDecision;
+  decisionSource: "user-policy" | "agent-policy";
+}
+
+export interface DeliveryStress {
+  collateralDeclinePct: 50 | 90 | 100;
+  estimatedRecovery: bigint;
+  estimatedLoss: bigint;
+  estimatedPrincipalLossPct: number;
 }

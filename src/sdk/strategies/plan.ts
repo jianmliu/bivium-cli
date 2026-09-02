@@ -5,8 +5,9 @@
 //   sequential — a swap leg but NO Router → approve → fill → swap as separate txs, explicitly non-atomic.
 // This module only BUILDS the plan (data). Execution stays with the existing client / trade paths.
 import { encodeAbiParameters, keccak256 } from "viem";
+import { computeMarketId } from "../market.ts";
 import type { Address, Hex, Offer } from "../types.ts";
-import type { Plan, PlanStep, StrategyQuote, StrategyResolution } from "./types.ts";
+import type { MarketRiskReport, Plan, PlanStep, StrategyQuote, StrategyResolution } from "./types.ts";
 
 export interface PlanOptions {
   now: bigint;
@@ -19,6 +20,16 @@ export interface PlanOptions {
   /** Swap route for the swap leg; minOut is the only field the plan needs. */
   swap?: { sellToken: Address; buyToken: Address; minOut: bigint };
   core: Address;
+  riskReport?: MarketRiskReport;
+}
+
+function sameMarketId(left: unknown, right: unknown): boolean {
+  const bytes32 = /^0x[0-9a-fA-F]{64}$/;
+  return typeof left === "string"
+    && typeof right === "string"
+    && bytes32.test(left)
+    && bytes32.test(right)
+    && left.toLowerCase() === right.toLowerCase();
 }
 
 export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigint): Hex {
@@ -31,6 +42,21 @@ export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigi
 }
 
 export function buildPlan(res: StrategyResolution, quote: StrategyQuote, opts: PlanOptions): Plan {
+  const resolvedMarketId = computeMarketId(res.row.market.params);
+  if (!sameMarketId(quote.marketId, resolvedMarketId)) {
+    throw new Error("quote market does not match resolution");
+  }
+  if (quote.strategyId !== res.strategy.id) {
+    throw new Error("quote strategy does not match resolution");
+  }
+  if (opts.riskReport && !sameMarketId(opts.riskReport.market, quote.marketId)) {
+    throw new Error("risk report market does not match quote");
+  }
+  if (opts.riskReport?.decision === "reject") throw new Error("risk policy rejected this plan");
+  if (opts.riskReport?.decision === "require_user_confirmation") {
+    throw new Error("risk policy requires user confirmation");
+  }
+
   const s = res.strategy;
   const needsSwap = s.requires.includes("swap");
   const mode: Plan["mode"] = !needsSwap ? "intent" : opts.router ? "router" : "sequential";
@@ -78,6 +104,9 @@ export function buildPlan(res: StrategyResolution, quote: StrategyQuote, opts: P
   return {
     mode,
     strategyId: s.id,
+    marketId: quote.marketId,
+    riskDecision: opts.riskReport?.decision ?? "not_evaluated",
+    riskWarnings: opts.riskReport?.warnings.map(({ message }) => message) ?? [],
     steps,
     limits: {
       // maxLoss = maxTopUp + premium for borrow-and-sell (which IS the prepay); the stake for longs;

@@ -13,6 +13,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   // ── 看空 ──
   {
     id: "short",
+    initialRelease: true,
+    outcomeLabels: ["Repay borrowed asset", "Forfeit quote collateral"],
     name: "无清算做空",
     oneLiner: "借入资产并立即卖出。跌了买回还币；涨破 K 就放弃抵押——亏损封顶，中途没人能动你的仓位。",
     group: "bearish",
@@ -32,6 +34,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "pairShort",
+    initialRelease: false,
+    outcomeLabels: ["Repay borrowed asset", "Forfeit counter collateral"],
     name: "相对做空",
     oneLiner: "抵押 counter 借 asset，卖成 counter。押的是比率而不是美元价，两腿各自的插针互相抵消。",
     group: "relative",
@@ -52,6 +56,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   // ── 看多 ──
   {
     id: "leveredLong",
+    initialRelease: false,
+    outcomeLabels: ["Repay borrowed quote", "Deliver asset collateral"],
     name: "有地板的杠杆多头",
     oneLiner: "抵押 C 借现金，现金再买 C。杠杆上限由 strike 决定，最坏结果是交割 C——永远不会被针打爆。",
     group: "bullish",
@@ -71,6 +77,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "protectivePut",
+    initialRelease: false,
+    outcomeLabels: ["Repay and retain asset", "Deliver asset at strike"],
     name: "保护性看跌",
     oneLiner: "持有 C，抵押借出现金并持有现金。等价于给 C 买了一张到期以 K 卖出的保险。",
     group: "bullish",
@@ -88,6 +96,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   // ── 持有并收益 ──
   {
     id: "lendAsset",
+    initialRelease: true,
+    outcomeLabels: ["Asset repaid", "Asset called away"],
     name: "带薪止盈",
     oneLiner: "出借 asset，收固定 premium；涨到 K 被叫走 = 在目标价止盈。一张会付你钱的限价卖单。",
     group: "yield",
@@ -104,6 +114,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "lendQuote",
+    initialRelease: true,
+    outcomeLabels: ["Quote repaid", "Asset assigned at target"],
     name: "带薪抄底",
     oneLiner: "出借现金，收 premium；C 跌到 K 被指派 = 以目标价买入。一张会付你钱的限价买单。",
     group: "yield",
@@ -121,6 +133,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   // ── 波动与组合(需要 Router 或前端编排;暂不可作为单一单位报价)──
   {
     id: "straddle",
+    initialRelease: false,
+    outcomeLabels: ["Downside leg pays", "Upside leg pays"],
     name: "做多波动(跨式)",
     oneLiner: "credit 线 borrow + options 线 borrow，同 K 同 T。",
     group: "volatility",
@@ -139,6 +153,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "shortVol",
+    initialRelease: false,
+    outcomeLabels: ["Both legs expire", "One or both legs assigned"],
     name: "做空波动",
     oneLiner: "两条线同时 lend。两次 take ask，纯前端编排即可。",
     group: "volatility",
@@ -157,6 +173,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "collar",
+    initialRelease: false,
+    outcomeLabels: ["Protected downside delivery", "Upside called away"],
     name: "领口",
     oneLiner: "credit 线 borrow + options 线 lend，同一资产(资产需同时是某市场抵押与另一市场借出资产)。",
     group: "hold",
@@ -175,6 +193,8 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
   {
     id: "spread",
+    initialRelease: false,
+    outcomeLabels: ["Both legs expire", "Spread settles between strikes", "Maximum spread payout"],
     name: "价差",
     oneLiner: "同 pair 两档 strike 一借一贷(ladder 已有多档 rung;需 Router 支持混合 fill + take)。",
     group: "relative",
@@ -193,8 +213,15 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
 ];
 
+const STRATEGY_ALIASES: Readonly<Record<string, string>> = {
+  earnOnHoldings: "lendAsset",
+  buyAtTarget: "lendQuote",
+  cappedRiskShort: "short",
+};
+
 export function getStrategy(id: string): StrategyDef {
-  const s = STRATEGIES.find((d) => d.id === id);
+  const stableId = STRATEGY_ALIASES[id] ?? id;
+  const s = STRATEGIES.find((d) => d.id === stableId);
   if (!s) throw new Error(`unknown strategy ${JSON.stringify(id)}`);
   return s;
 }
