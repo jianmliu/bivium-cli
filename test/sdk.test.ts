@@ -137,3 +137,14 @@ test("poolKeyFor sorts the pair by byte order, never by argument order", async (
   assert.equal(a.currency1, high);
   assert.deepEqual(a, b); // the same pool whichever leg is collateral
 });
+
+test("the bare offerCommitment is the core-v1 scheme and NEVER matches a core-v2 attestation", async () => {
+  const { offerCommitment } = await import("../src/sdk/offer.ts");
+  const { adapterFor } = await import("../src/sdk/lineage.ts");
+  const domain = { chainId: 46630, core: "0x8943085a473BD89db8b1deB6ca3dc40a9d4CD592" as const };
+  const v2 = adapterFor("core-v2").offerCommitment(domain, SESSION_OFFER);
+  // Same offer, two lineages, two different hashes — the footgun this pins: recomputing a relayer entry's
+  // commitment with the bare function on a v2 profile yields a hash nothing on-chain ever ratified.
+  assert.notEqual(v2, offerCommitment(SESSION_OFFER));
+  assert.equal(adapterFor("core-v1").offerCommitment(domain, SESSION_OFFER), offerCommitment(SESSION_OFFER));
+});
