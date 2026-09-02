@@ -28,7 +28,14 @@ export function encodeOffer(offer: Offer): Hex {
   return encodeAbiParameters([OFFER_TUPLE], [offer]);
 }
 
-/** Offer commitment == core hashOffer == keccak256(abi.encode(offer)). */
+/** The CORE-V1 commitment: keccak256(abi.encode(offer)) over the bare 15-field tuple, no domain.
+ *
+ *  This is NOT the commitment a core-v2 deployment (every current profile, Robinhood included) ratifies —
+ *  core-v2 binds the domain into the preimage (17 fields, chainId + core prepended), so the correct call there
+ *  is `adapterFor(profile.abiProfile).offerCommitment(domain, offer)`, which is what `parseSignedOfferFile`
+ *  verifies against. Hashing a v2 offer with this function produces a plausible-looking hash that nothing
+ *  on-chain will ever attest — when handling relayer entries, carry the entry's own `commitment` rather than
+ *  recomputing with this. Kept exported for the core-v1 lineage and its golden vectors. */
 export function offerCommitment(offer: Offer): Hex {
   return keccak256(encodeOffer(offer));
 }
