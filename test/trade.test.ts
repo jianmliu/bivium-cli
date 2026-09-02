@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fillCost, filterByLimitTick, planSweepByFace, sortSide, type BookEntry } from "../src/sdk/orderbook.ts";
-import { TradeClient } from "../src/sdk/trade.ts";
+import { TradeClient, askBackingShortfall } from "../src/sdk/trade.ts";
 import { tickToPrice } from "../src/sdk/tick.ts";
 import type { Address, DeploymentProfile, Hex, Offer } from "../src/sdk/types.ts";
 
@@ -76,4 +76,22 @@ test("limit-tick excludes worse-priced asks from the sweep and bounds the worst 
     plan.cost,
     plan.takes.reduce((sum, t) => sum + fillCost(t.entry.offer, t.units, t.entry.price), 0n),
   );
+});
+
+test("askBackingShortfall: credit alone, escrow alone, both, and the ceil that core applies", () => {
+  const strike = 85n * 10n ** 24n; // 85 bUSD (6dp) per mNVDA (18dp) — the Robinhood mnvda-busd-85 market
+  // pure secondary: the maker holds every unit it sells
+  assert.equal(askBackingShortfall({ units: 300_000_000n, credit: 300_000_000n, escrow: 0n, strike }), 0n);
+  // pure resting borrow order (bivium-core #171): 300 face against 5 mNVDA needs ceil(300e6·1e36/85e24) = 3.529… mNVDA
+  assert.equal(askBackingShortfall({ units: 300_000_000n, credit: 0n, escrow: 5n * 10n ** 18n, strike }), 0n);
+  assert.equal(
+    askBackingShortfall({ units: 300_000_000n, credit: 0n, escrow: 3_529_411_764_705_882_352n, strike }),
+    1n, // one wei short of the rounded-up lock
+  );
+  // mixed: 100 held + 200 originated against exactly the collateral 200 face locks
+  const lock200 = (200_000_000n * 10n ** 36n + strike - 1n) / strike;
+  assert.equal(askBackingShortfall({ units: 300_000_000n, credit: 100_000_000n, escrow: lock200, strike }), 0n);
+  assert.equal(askBackingShortfall({ units: 300_000_000n, credit: 100_000_000n, escrow: lock200 - 1n, strike }), 1n);
+  // no escrow at all collapses to the pre-#171 rule
+  assert.ok(askBackingShortfall({ units: 300_000_000n, credit: 0n, escrow: 0n, strike }) > 0n);
 });
