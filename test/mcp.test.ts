@@ -26,7 +26,8 @@ const market: DiscoveredMarket = {
 };
 const rows: PoolRow[] = [{ market, loanSymbol: "mAI", collateralSymbol: "bUSD", loanDecimals: 18, collateralDecimals: 6 }];
 const spot: SpotRef = { px: 134_600_000_000_000_000n, status: "ready", pair: "BUSD-MAI" };
-const mcp = createStrategyMcp({ profile, overrides: { rows, spot }, now: () => NOW });
+const positions = async (taker: string) => ({ ok: true as const, taker, at: 1, marketsScanned: 1, positions: [{ key: "busd-mai-3p5-w0911", marketId: "0x01", line: "options", side: "borrow" as const, kinds: ["short"], maturity: String(MATURITY), secondsToMaturity: 1, matured: false, urgent: false, debt: 500, collateral: 142.857143, credit: 0, liquidity: 0, bufferPct: 100, branches: { collateralValueLoan: 1000, netFromRepaying: 500, better: "repay" as const }, lenderOutcome: undefined, exit: { action: "buy back + repay + reclaim", note: "" } }] });
+const mcp = createStrategyMcp({ profile, overrides: { rows, spot, parity: false, positions }, now: () => NOW });
 
 const call = (id: number, name: string, args: Record<string, unknown>) => mcp.handle({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
 const parsed = (r: Awaited<ReturnType<typeof mcp.handle>>) => JSON.parse(((r!.result as { content: { text: string }[] }).content[0]!).text);
@@ -37,7 +38,7 @@ test("mcp: handshake + tools/list", async () => {
   assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null);
   const list = await mcp.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.deepEqual((list!.result as { tools: { name: string }[] }).tools.map((t) => t.name), TOOLS.map((t) => t.name));
-  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan", "strategy_positions"]);
   const unknown = await mcp.handle({ jsonrpc: "2.0", id: 3, method: "nope" });
   assert.equal(unknown!.error!.code, -32601);
 });
@@ -67,5 +68,13 @@ test("mcp: tool-level failures are isError results, not protocol errors", async 
   assert.equal(res.isError, true);
   assert.match(res.content[0]!.text, /minOut is required/);
   const bad = await call(9, "strategy_quote", { strategy: "short" });
+  assert.equal((bad!.result as { isError?: boolean }).isError, true);
+});
+
+test("mcp: strategy_positions proxies the app's positions and refuses without a taker", async () => {
+  const r = parsed(await call(20, "strategy_positions", { taker: "0x" + "1".repeat(40) }));
+  assert.equal(r.positions.length, 1);
+  assert.deepEqual(r.positions[0].kinds, ["short"]);
+  const bad = await call(21, "strategy_positions", {});
   assert.equal((bad!.result as { isError?: boolean }).isError, true);
 });

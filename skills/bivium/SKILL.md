@@ -317,7 +317,12 @@ user's key. Register it in the client's MCP config:
 
 Tools: `strategy_list` (the catalog — read it first), `market_list` (pick a maturity; join existing
 markets), `strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),
-`strategy_plan` (mode + steps + hard limits; never executes). Arguments mirror the CLI flags
+`strategy_plan` (mode + steps + hard limits; never executes), `strategy_positions` (an account's holdings
+read as strategies, proxied from the app's `/api/strategies/positions`; the CLI twin is
+`strategy positions --taker <addr>`). Every quote carries `parity`: the SDK recomputes locally only to build
+transactions — the number a human sees comes from the app's `POST /api/strategies/quote` — and `parity.status`
+says whether the two agree (`ok`), disagree (`mismatch`: stop and say so, trust neither number), or could not be
+compared (`skipped` for off-book pricing or multi-level sweeps, `unavailable` when the app is down). Arguments mirror the CLI flags
 (`strategy, asset, size, maturity, bufferPct, aprBps | priceWad, sigma`). Tool failures come back as
 `isError` results whose text says what to change (e.g. "pass aprBps or priceWad").
 

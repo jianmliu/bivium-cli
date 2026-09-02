@@ -18,6 +18,7 @@ import { buildPlan } from "./plan.ts";
 import { quoteStrategy } from "./quote.ts";
 import { resolveStrategy } from "./resolve.ts";
 import type { Line, Plan, PoolRow, PxWad, StrategyQuote, StrategyResolution } from "./types.ts";
+import { fetchHttpQuote, quoteParity, type HttpQuoteLoader, type QuoteParity } from "./http.ts";
 
 export interface MarketSource {
   /** Default: relayer when the profile has one, else chain. */
@@ -146,6 +147,12 @@ export interface GatherRequest {
   /** Injection points (tests, or a caller that already holds them): skip discovery / the feed. */
   rows?: PoolRow[];
   spot?: SpotRef;
+  /**
+   * Parity with the app's quote (POST /api/strategies/quote): the number a human sees comes from there, this
+   * SDK recomputes to build transactions, and the two must agree. Default: the profile's relayer; `false`
+   * skips; a loader injects (tests).
+   */
+  parity?: HttpQuoteLoader | false;
 }
 
 export interface GatheredStrategy {
@@ -159,6 +166,8 @@ export interface GatheredStrategy {
   size: bigint;
   now: bigint;
   sigmaSource: "request" | "feed" | "none";
+  /** Agreement with the app's own quote — the runtime twin of the golden vectors. */
+  parity: QuoteParity;
 }
 
 export async function gatherStrategyInputs(
@@ -211,7 +220,21 @@ export async function gatherStrategyInputs(
   if (sigmaAnnual !== undefined && !(Number.isFinite(sigmaAnnual) && sigmaAnnual > 0)) throw new Error("sigmaAnnual must be a positive annualised volatility (e.g. 7.11 for 711%)");
 
   const quote = quoteStrategy({ resolution: res, priceWad, spot: spot.px, sigmaAnnual, now }, size);
-  return { res, quote, spot: spot.px, spotStatus: spot.status, pair: spot.pair, priceWad, priceFrom, size, now, sigmaSource };
+  const gathered = { res, quote, spot: spot.px, spotStatus: spot.status, pair: spot.pair, priceWad, priceFrom, size, now, sigmaSource } as GatheredStrategy;
+
+  // Parity: only on the live-book basis (an explicit price or APR has no app-side counterpart), only when a
+  // loader exists. Never fatal — a missing app is "unavailable"; a disagreeing one is a loud "mismatch".
+  const pricedOffBook = req.priceWad !== undefined || req.aprBps !== undefined;
+  const loader: HttpQuoteLoader | undefined = req.parity === false ? undefined : req.parity ?? (profile.relayerUrl ? (spec) => fetchHttpQuote(profile.relayerUrl, spec) : undefined);
+  if (!loader) gathered.parity = { status: "skipped", reason: req.parity === false ? "parity disabled" : "profile has no relayerUrl" };
+  else if (pricedOffBook) gathered.parity = quoteParity(gathered, { ok: false, reason: "n/a" }, { pricedOffBook: true });
+  else {
+    const counterSymbol = counter ? (counter.symbol ?? counter.address) : undefined;
+    gathered.parity = quoteParity(gathered, await loader({
+      kind: strategy.id, asset: asset.symbol ?? asset.address, counter: counterSymbol, size: req.size, maturity: req.maturity, bufferPct: req.bufferPct, sigmaAnnual,
+    }));
+  }
+  return gathered;
 }
 
 /** What the user puts in, per strategy — the unit of `quote.prepay`. */
@@ -245,6 +268,7 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
     size: g.size,
     prepayToken: prepayIsAsset(res.strategy.id) ? res.asset : res.numeraire,
     sigmaSource: g.sigmaSource,
+    parity: g.parity,
     quote,
   };
 }
