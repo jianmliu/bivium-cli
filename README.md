@@ -89,6 +89,27 @@ empty market data. The MCP server has no transaction execution or signing tool. 
 mainnet `4663` remains identity/reference-only: neither the CLI strategy surface nor this MCP
 surface implies permission to construct, sign, submit, or execute a mainnet write.
 
+### The strategy math as a package — `@bivium/cli/strategies`
+
+The toolbox's L1 layer (types, lines, payoffs, exercise probability, catalog, resolve, quote) is exported on its own
+subpath so that other runtimes run *this* implementation rather than a port of it. The entry is pure: viem's hashing
+helpers and nothing else — no chain client, no filesystem, no fetch — so it bundles into a Cloudflare Worker or a
+browser as readily as into Node (`test/package-surface.test.ts` pins that closure). The Bivium frontend's
+`/api/strategies*` Functions consume it this way; the golden vectors in `test/golden/` and the runtime parity check in
+`strategy quote` are what keep the two ends honest.
+
+```jsonc
+// package.json of a consumer — pin a commit; the sources are consumed directly, nothing is built on install
+"dependencies": { "@bivium/cli": "git+https://github.com/jianmliu/bivium-cli.git#<sha>" }
+```
+
+```ts
+import { quoteStrategy, resolveStrategy, type PoolRow } from "@bivium/cli/strategies";
+```
+
+The sources use explicit `.ts` import specifiers, so a TypeScript consumer sets `allowImportingTsExtensions: true`
+(legal under `noEmit`); esbuild, wrangler and tsx need nothing.
+
 ## Required execution sequence
 
 ```text
