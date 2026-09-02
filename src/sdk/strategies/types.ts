@@ -190,6 +190,9 @@ export interface Plan {
    */
   mode: "intent" | "router" | "sequential";
   strategyId: string;
+  marketId: Hex;
+  riskDecision: RiskDecision | "not_evaluated";
+  riskWarnings: string[];
   steps: PlanStep[];
   limits: PlanLimits;
   worstCase: bigint;

@@ -6,7 +6,7 @@ import type { DiscoveredMarket } from "../src/sdk/discovery.ts";
 import {
   STRATEGIES, getStrategy, classifyLine, humanStrike, exerciseProbability,
   borrowSellPayoff, leveredLongPayoff, lendQuotePayoff, priceWhereWorth,
-  resolveStrategy, quoteStrategy, buildPlan, type PoolRow,
+  resolveStrategy, quoteStrategy, buildPlan, type MarketRiskReport, type PoolRow,
 } from "../src/sdk/strategies/index.ts";
 
 // ── fixture: the design note's worked example ─────────────────────────────────────────────
@@ -139,8 +139,38 @@ test("quote + plan: the confirm-screen numbers and a bounded plan whose maxLoss 
   const core = "0x0000000000000000000000000000000000000c01" as Address;
   const seq = buildPlan(res, q, { now: NOW, core });
   assert.equal(seq.mode, "sequential"); // swap leg, no Router → explicitly non-atomic
+  assert.equal(seq.marketId, q.marketId);
+  assert.equal(seq.riskDecision, "not_evaluated");
+  assert.deepEqual(seq.riskWarnings, []);
   assert.equal(seq.limits.maxLoss, 966_002_800n);
   assert.deepEqual(seq.steps.map((s) => s.kind), ["approve", "fill-bid", "swap"]);
+
+  const report = (overrides: Partial<MarketRiskReport> = {}): MarketRiskReport => ({
+    market: q.marketId,
+    facts: [],
+    warnings: [{ code: "FREEZABLE", severity: "warning", message: "collateral can be frozen" }],
+    unknowns: [],
+    decision: "accept",
+    decisionSource: "user-policy",
+    ...overrides,
+  });
+  assert.throws(
+    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ market: "0x01" }) }),
+    /risk report market does not match quote/,
+  );
+  assert.throws(
+    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ decision: "reject", decisionSource: "agent-policy" }) }),
+    /risk policy rejected this plan/,
+  );
+  assert.throws(
+    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ decision: "require_user_confirmation", decisionSource: "agent-policy" }) }),
+    /risk policy requires user confirmation/,
+  );
+  const accepted = buildPlan(res, q, { now: NOW, core, riskReport: report() });
+  assert.equal(accepted.marketId, q.marketId);
+  assert.equal(accepted.riskDecision, "accept");
+  assert.deepEqual(accepted.riskWarnings, ["collateral can be frozen"]);
+  assert.equal(accepted.quoteId, seq.quoteId);
 
   const router = "0x0000000000000000000000000000000000000d01" as Address;
   const atomic = buildPlan(res, q, { now: NOW, core, router, swap: { sellToken: mAI, buyToken: bUSD, minOut: 1_000_000_000n } });
@@ -148,7 +178,7 @@ test("quote + plan: the confirm-screen numbers and a bounded plan whose maxLoss 
   assert.equal(atomic.steps[0]!.kind, "grant-auth");
   assert.equal(atomic.limits.minOut, 1_000_000_000n);
   assert.equal(atomic.quoteId.length, 66);
-  assert.notEqual(atomic.quoteId, seq.quoteId === atomic.quoteId ? "0x" : seq.quoteId); // same inputs → same id
+  assert.equal(atomic.quoteId, seq.quoteId); // same economic inputs → same deterministic id
 
   // a single-leg lend is an intent
   const lendRes = resolveStrategy({ strategyId: "lendAsset", asset: mAI, size: N, maturity: MATURITY, bufferPct: 48 }, [row(K20)], S0);

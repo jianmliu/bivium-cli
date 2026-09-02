@@ -6,7 +6,7 @@
 // This module only BUILDS the plan (data). Execution stays with the existing client / trade paths.
 import { encodeAbiParameters, keccak256 } from "viem";
 import type { Address, Hex, Offer } from "../types.ts";
-import type { Plan, PlanStep, StrategyQuote, StrategyResolution } from "./types.ts";
+import type { MarketRiskReport, Plan, PlanStep, StrategyQuote, StrategyResolution } from "./types.ts";
 
 export interface PlanOptions {
   now: bigint;
@@ -19,6 +19,7 @@ export interface PlanOptions {
   /** Swap route for the swap leg; minOut is the only field the plan needs. */
   swap?: { sellToken: Address; buyToken: Address; minOut: bigint };
   core: Address;
+  riskReport?: MarketRiskReport;
 }
 
 export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigint): Hex {
@@ -31,6 +32,14 @@ export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigi
 }
 
 export function buildPlan(res: StrategyResolution, quote: StrategyQuote, opts: PlanOptions): Plan {
+  if (opts.riskReport && opts.riskReport.market !== quote.marketId) {
+    throw new Error("risk report market does not match quote");
+  }
+  if (opts.riskReport?.decision === "reject") throw new Error("risk policy rejected this plan");
+  if (opts.riskReport?.decision === "require_user_confirmation") {
+    throw new Error("risk policy requires user confirmation");
+  }
+
   const s = res.strategy;
   const needsSwap = s.requires.includes("swap");
   const mode: Plan["mode"] = !needsSwap ? "intent" : opts.router ? "router" : "sequential";
@@ -78,6 +87,9 @@ export function buildPlan(res: StrategyResolution, quote: StrategyQuote, opts: P
   return {
     mode,
     strategyId: s.id,
+    marketId: quote.marketId,
+    riskDecision: opts.riskReport?.decision ?? "not_evaluated",
+    riskWarnings: opts.riskReport?.warnings.map(({ message }) => message) ?? [],
     steps,
     limits: {
       // maxLoss = maxTopUp + premium for borrow-and-sell (which IS the prepay); the stake for longs;
