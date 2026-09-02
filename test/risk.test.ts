@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assessRisk,
   observed,
+  stressDelivery,
   unknown,
   type MarketRiskInput,
 } from "../src/sdk/strategies/index.ts";
@@ -192,4 +193,70 @@ test("a reject condition wins over unknown evidence deterministically", () => {
 
   assert.equal(report.decision, "reject");
   assert.deepEqual(report.unknowns, ["referencePrice"]);
+});
+
+test("delivery stress reports exact 50%, 90%, and 100% collateral declines", () => {
+  const scenarios = stressDelivery({
+    principal: 1_000_000n,
+    collateralValueAtEntry: 1_000_000n,
+  });
+
+  assert.deepEqual(scenarios, [
+    {
+      collateralDeclinePct: 50,
+      estimatedRecovery: 500_000n,
+      estimatedLoss: 500_000n,
+      estimatedPrincipalLossPct: 50,
+    },
+    {
+      collateralDeclinePct: 90,
+      estimatedRecovery: 100_000n,
+      estimatedLoss: 900_000n,
+      estimatedPrincipalLossPct: 90,
+    },
+    {
+      collateralDeclinePct: 100,
+      estimatedRecovery: 0n,
+      estimatedLoss: 1_000_000n,
+      estimatedPrincipalLossPct: 100,
+    },
+  ]);
+});
+
+test("delivery stress caps an overcollateralized recovery at principal", () => {
+  const scenarios = stressDelivery({
+    principal: 1_000_000n,
+    collateralValueAtEntry: 3_000_000n,
+  });
+
+  assert.equal(scenarios[0]?.estimatedRecovery, 1_000_000n);
+  assert.equal(scenarios[0]?.estimatedLoss, 0n);
+  assert.equal(scenarios[0]?.estimatedPrincipalLossPct, 0);
+});
+
+test("delivery stress rejects non-positive principal and negative collateral value", () => {
+  assert.throws(
+    () => stressDelivery({ principal: 0n, collateralValueAtEntry: 1n }),
+    /principal must be positive/i,
+  );
+  assert.throws(
+    () => stressDelivery({ principal: -1n, collateralValueAtEntry: 1n }),
+    /principal must be positive/i,
+  );
+  assert.throws(
+    () => stressDelivery({ principal: 1n, collateralValueAtEntry: -1n }),
+    /collateral value must be non-negative/i,
+  );
+});
+
+test("delivery stress keeps amount arithmetic in bigint and rounds percentages to basis points", () => {
+  const scenarios = stressDelivery({ principal: 7n, collateralValueAtEntry: 6n });
+
+  for (const scenario of scenarios) {
+    assert.equal(typeof scenario.estimatedRecovery, "bigint");
+    assert.equal(typeof scenario.estimatedLoss, "bigint");
+  }
+  assert.equal(scenarios[0]?.estimatedRecovery, 3n);
+  assert.equal(scenarios[0]?.estimatedLoss, 4n);
+  assert.equal(scenarios[0]?.estimatedPrincipalLossPct, 57.14);
 });

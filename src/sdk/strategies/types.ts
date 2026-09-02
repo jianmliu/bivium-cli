@@ -261,3 +261,10 @@ export interface MarketRiskReport {
   decision: RiskDecision;
   decisionSource: "user-policy" | "agent-policy";
 }
+
+export interface DeliveryStress {
+  collateralDeclinePct: 50 | 90 | 100;
+  estimatedRecovery: bigint;
+  estimatedLoss: bigint;
+  estimatedPrincipalLossPct: number;
+}
