@@ -48,6 +48,10 @@ export interface InputField {
 
 export interface StrategyDef {
   id: string;
+  /** True only for products exposed in the first Robinhood release. */
+  initialRelease: boolean;
+  /** User-facing labels for the distinct maturity outcomes. */
+  outcomeLabels: readonly string[];
   /** User-facing name (zh) and one-liner. */
   name: string;
   oneLiner: string;

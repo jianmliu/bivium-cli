@@ -38,6 +38,21 @@ test("catalog: ids unique, every mirror resolves, exactly the six single-leg str
   for (const s of STRATEGIES) assert.ok(s.legs.length >= 1);
 });
 
+test("catalog: aliases resolve to stable ids and initial products expose outcome labels", () => {
+  assert.equal(getStrategy("earnOnHoldings").id, "lendAsset");
+  assert.equal(getStrategy("buyAtTarget").id, "lendQuote");
+  assert.equal(getStrategy("cappedRiskShort").id, "short");
+
+  assert.deepEqual(
+    STRATEGIES.filter((s) => s.initialRelease).map((s) => s.id).sort(),
+    ["lendAsset", "lendQuote", "short"],
+  );
+  for (const s of STRATEGIES) {
+    assert.ok(s.outcomeLabels.length >= 2, `${s.id} needs at least two outcome labels`);
+    assert.ok(s.outcomeLabels.every((label) => label.length > 0), `${s.id} has an empty outcome label`);
+  }
+});
+
 test("lines: derived from token roles; human strike is the reciprocal on options/exchange", () => {
   assert.equal(classifyLine("mAI", "bUSD"), "options");
   assert.equal(classifyLine("bUSD", "mNVDA"), "credit");
