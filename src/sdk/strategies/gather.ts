@@ -8,6 +8,7 @@ import { discoverMarketsOnChain, fetchRelayerMarkets, type DiscoveredMarket } fr
 import { formatAmount, parseAmount } from "../math.ts";
 import { sortSide, type BookEntry } from "../orderbook.ts";
 import { resolveToken } from "../profile.ts";
+import { adapterFor } from "../lineage.ts";
 import { fetchRelayerBook, requireRelayerV2, type RelayerDomain } from "../relayer.ts";
 import { fetchPairRatio, pairFor } from "../spot.ts";
 import { priceFromSimpleAprBps } from "../tick.ts";
@@ -219,7 +220,10 @@ export async function gatherStrategyInputs(
   if (sigmaAnnual === undefined) sigmaSource = "none";
   if (sigmaAnnual !== undefined && !(Number.isFinite(sigmaAnnual) && sigmaAnnual > 0)) throw new Error("sigmaAnnual must be a positive annualised volatility (e.g. 7.11 for 711%)");
 
-  const quote = quoteStrategy({ resolution: res, priceWad, spot: spot.px, sigmaAnnual, now }, size);
+  // Ids follow the deployment's lineage — the same adapter `market id` and every write path use — so the id a
+  // human is shown is the one the core (and the app's manifest) recognise.
+  const marketId = adapterFor(profile.abiProfile).computeMarketId({ chainId: profile.chainId, core: profile.core }, res.row.market.params);
+  const quote = quoteStrategy({ resolution: res, priceWad, spot: spot.px, sigmaAnnual, now, marketId }, size);
   const gathered = { res, quote, spot: spot.px, spotStatus: spot.status, pair: spot.pair, priceWad, priceFrom, size, now, sigmaSource } as GatheredStrategy;
 
   // Parity: only on the live-book basis (an explicit price or APR has no app-side counterpart), only when a
