@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -76,4 +76,63 @@ test("strategy CLI: trace uses the profile domain and needs no signing key", () 
   assert.equal(body.quoteId, quoteId);
   assert.equal(body.account.toLowerCase(), account.toLowerCase());
   assert.match(body.intentId, /^0x[0-9a-f]{64}$/);
+});
+
+test("strategy CLI: bounds and classifies risk files before reading", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bivium-risk-bounds-"));
+  const oversized = join(dir, "oversized.json");
+  writeFileSync(oversized, " ".repeat(256 * 1024 + 1));
+  try {
+    const tooLarge = cli(["strategy", "assess", "--risk-file", oversized, "--json"]);
+    assert.notEqual(tooLarge.status, 0);
+    assert.match(tooLarge.stderr, /too large/i);
+
+    const nonRegular = cli(["strategy", "assess", "--risk-file", dir, "--json"]);
+    assert.notEqual(nonRegular.status, 0);
+    assert.match(nonRegular.stderr, /regular file/i);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("strategy CLI: rejects decimal amounts outside uint256 without parsing unbounded digits", () => {
+  const base = JSON.parse(readFileSync(fixture, "utf8"));
+  const dir = mkdtempSync(join(tmpdir(), "bivium-risk-amount-"));
+  try {
+    for (const [name, value] of [
+      ["uint256-plus-one", (1n << 256n).toString()],
+      ["too-many-digits", "1".repeat(1000)],
+    ]) {
+      const path = join(dir, `${name}.json`);
+      writeFileSync(path, JSON.stringify({ ...base, principal: value }));
+      const result = cli(["strategy", "assess", "--risk-file", path, "--json"]);
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, /uint256|decimal string/i);
+    }
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("strategy CLI: rejects nonce outside uint256 or with unbounded digits", () => {
+  const common = [
+    "strategy", "trace", "--strategy-id", "short", `--quote-id=0x${"22".repeat(32)}`,
+    "--account", "0x00000000000000000000000000000000000000A1", "--json",
+  ];
+  for (const nonce of [(1n << 256n).toString(), "9".repeat(1000)]) {
+    const result = cli([...common, "--nonce", nonce]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /uint256|non-negative integer/i);
+  }
+});
+
+test("strategy CLI: rejects trailing and unknown positional tokens", () => {
+  for (const args of [
+    ["strategy", "catalog", "typo", "--json"],
+    ["strategy", "unknown", "--json"],
+  ]) {
+    const result = cli(args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /unknown command/i);
+  }
 });

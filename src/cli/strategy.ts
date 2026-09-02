@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { getAddress } from "viem";
 import {
   assessRisk,
@@ -30,6 +30,9 @@ const RISK_KEYS = new Set([
 const EVIDENCE_STATES = new Set(["observed", "warning", "unknown", "not_applicable"]);
 const COLLATERAL_KINDS = new Set(["stock-token", "ai-token", "meme", "other"]);
 const BOOLEAN_EVIDENCE = new Set(["mintable", "freezable", "blacklistable", "upgradeable", "sellability"]);
+/** Agent risk files are small evidence envelopes, not bulk-data inputs. */
+export const MAX_RISK_FILE_BYTES = 256 * 1024;
+const UINT256_MAX_DECIMAL = ((1n << 256n) - 1n).toString();
 
 function required(values: StrategyCliContext["values"], flag: string): string {
   const value = values[flag];
@@ -49,10 +52,15 @@ function exactKeys(value: Record<string, unknown>, allowed: Set<string>, label: 
   if (unexpected) throw new Error(`${label} has unexpected field ${JSON.stringify(unexpected)}`);
 }
 
-function parseDecimal(value: unknown, field: string): bigint | undefined {
+function parseUint256Decimal(value: unknown, field: string): bigint | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^\d+$/.test(value)) {
     throw new Error(`${field} must be a non-negative decimal string`);
+  }
+  // Bound work before BigInt parsing. uint256 max has 78 decimal digits.
+  if (value.length > UINT256_MAX_DECIMAL.length
+      || (value.length === UINT256_MAX_DECIMAL.length && value > UINT256_MAX_DECIMAL)) {
+    throw new Error(`${field} must fit uint256`);
   }
   return BigInt(value);
 }
@@ -62,6 +70,16 @@ function parseRiskFile(path: string): {
   principal?: bigint;
   collateralValueAtEntry?: bigint;
 } {
+  let metadata;
+  try {
+    metadata = lstatSync(path);
+  } catch (error) {
+    throw new Error(`invalid risk file: ${(error as Error).message}`);
+  }
+  if (!metadata.isFile()) throw new Error("risk file must be a regular file");
+  if (metadata.size > MAX_RISK_FILE_BYTES) {
+    throw new Error(`risk file is too large (maximum ${MAX_RISK_FILE_BYTES} bytes)`);
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -97,8 +115,8 @@ function parseRiskFile(path: string): {
   }
   return {
     input: { market: root.market as Hex, collateralKind: root.collateralKind as MarketRiskInput["collateralKind"], evidence: evidence as MarketRiskInput["evidence"] },
-    principal: parseDecimal(root.principal, "principal"),
-    collateralValueAtEntry: parseDecimal(root.collateralValueAtEntry, "collateralValueAtEntry"),
+    principal: parseUint256Decimal(root.principal, "principal"),
+    collateralValueAtEntry: parseUint256Decimal(root.collateralValueAtEntry, "collateralValueAtEntry"),
   };
 }
 
@@ -116,14 +134,13 @@ export function runStrategyCommand(subcommand: string, ctx: StrategyCliContext):
     return result;
   }
   if (subcommand === "trace") {
-    const nonce = required(ctx.values, "nonce");
-    if (!/^\d+$/.test(nonce)) throw new Error("--nonce must be a non-negative integer");
+    const nonce = parseUint256Decimal(required(ctx.values, "nonce"), "--nonce");
     return startTrace({
       chainId: ctx.profile.chainId,
       core: ctx.profile.core,
       strategyId: required(ctx.values, "strategy-id"),
       quoteId: required(ctx.values, "quote-id") as Hex,
-      nonce: BigInt(nonce),
+      nonce: nonce!,
       account: getAddress(required(ctx.values, "account")) as Address,
     });
   }

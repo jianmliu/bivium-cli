@@ -1585,7 +1585,9 @@ async function main(): Promise<void> {
   }
   const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true });
   const commandKey = positionals.slice(0, 3).join(" ");
-  const command = commands[commandKey] ?? commands[positionals.slice(0, 2).join(" ")] ?? commands[positionals[0] ?? ""];
+  const command = positionals[0] === "strategy"
+    ? positionals.length === 2 ? commands[positionals.join(" ")] : undefined
+    : commands[commandKey] ?? commands[positionals.slice(0, 2).join(" ")] ?? commands[positionals[0] ?? ""];
   if (!command) fail(`unknown command ${JSON.stringify(commandKey)}\n\n${USAGE}`);
   const profilePath = (values.profile as string | undefined) ?? process.env.BIVIUM_PROFILE;
   if (!profilePath) fail("no profile: pass --profile <path> or set BIVIUM_PROFILE");
