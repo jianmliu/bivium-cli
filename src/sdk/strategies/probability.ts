@@ -34,3 +34,26 @@ export function exerciseProbability(bufferPct: number, sigmaAnnual: number, days
   // formula serves the "below" direction when the caller passes the buffer as a positive OTM distance.
   return 1 - normalCdf(move / sigmaT);
 }
+
+/**
+ * P(exercise) from the exact exercise boundary rather than a buffer: the probability the
+ * maturity price lands on the exercise side of `boundary` under lognormal moves with no drift.
+ * `above` = P(S_T ≥ boundary) (short is exercised against; a lender is called away);
+ * `below` = P(S_T ≤ boundary) (a levered long delivers; a put-seller is assigned).
+ * The boundary is the strategy's OWN delivery point — for a levered long that is
+ * face ÷ total collateral, which sits well below K unless the position is at max LTV.
+ */
+export function exerciseProbabilityAt(
+  spot: bigint,
+  boundary: bigint,
+  direction: "above" | "below",
+  sigmaAnnual: number,
+  days: number,
+): number | null {
+  if (spot <= 0n || boundary <= 0n) return null;
+  if (!Number.isFinite(sigmaAnnual) || !Number.isFinite(days) || sigmaAnnual <= 0 || days <= 0) return null;
+  const move = Math.log(Number(boundary) / Number(spot)); // signed log-distance to the boundary
+  const sigmaT = sigmaAnnual * Math.sqrt(days / 365);
+  const z = move / sigmaT;
+  return direction === "above" ? 1 - normalCdf(z) : normalCdf(z);
+}
