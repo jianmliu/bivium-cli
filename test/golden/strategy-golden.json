@@ -2,7 +2,7 @@
   "generatedBy": "bivium-cli src/sdk/strategies (L1 canonical)",
   "conventions": {
     "buffer": "percent in the strategy's OTM direction, human price space: options/exchange = 100·(K/S₀ − 1), credit = 100·(1 − K/S₀)",
-    "probability": "one-sided lognormal: 1 − Φ(ln(1 + b)/(σ·√(days/365)))",
+    "probability": "one-sided lognormal at the strategy's OWN exercise boundary B (= payoff.boundary, which is K except for leveredLong where B = face ÷ total collateral): above → 1 − Φ(ln(B/S₀)/(σ·√(days/365))), below → Φ(ln(B/S₀)/(σ·√(days/365)))",
     "prepayUnit": "numeraire for short/pairShort/lendQuote; asset for leveredLong (topUp), protectivePut (holding) and lendAsset (lent)",
     "amounts": "exact bigint atoms; human floats must match to 1e-6 relative"
   },
@@ -39,7 +39,7 @@
         "boundaryWad": "285714286000000000",
         "realizedBufferPct": 100,
         "strikeHumanWad": "285714285714285714",
-        "exerciseProbability": 0.24072610296522412,
+        "exerciseProbability": 0.24072610264897765,
         "assetDecimals": 18,
         "numeraireDecimals": 6
       }
@@ -113,7 +113,7 @@
         "boundaryWad": "134412007394648913761",
         "realizedBufferPct": 50.98039215686274,
         "strikeHumanWad": "200000000000000000000",
-        "exerciseProbability": 0.3378231423890833,
+        "exerciseProbability": 0.12972500161054146,
         "assetDecimals": 18,
         "numeraireDecimals": 6
       }
@@ -150,7 +150,7 @@
         "boundaryWad": "200000000000000000000",
         "realizedBufferPct": 50.98039215686274,
         "strikeHumanWad": "200000000000000000000",
-        "exerciseProbability": 0.3378231423890833,
+        "exerciseProbability": 0.23450813131268317,
         "assetDecimals": 18,
         "numeraireDecimals": 6
       }
@@ -187,7 +187,7 @@
         "boundaryWad": "285714286000000000",
         "realizedBufferPct": 100,
         "strikeHumanWad": "285714285714285714",
-        "exerciseProbability": 0.24072610296522412,
+        "exerciseProbability": 0.24072610264897765,
         "assetDecimals": 18,
         "numeraireDecimals": 6
       }
@@ -224,7 +224,7 @@
         "boundaryWad": "200000000000000000000",
         "realizedBufferPct": 50.98039215686274,
         "strikeHumanWad": "200000000000000000000",
-        "exerciseProbability": 0.3378231423890833,
+        "exerciseProbability": 0.23450813131268317,
         "assetDecimals": 18,
         "numeraireDecimals": 6
       }
