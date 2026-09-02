@@ -1699,7 +1699,7 @@ function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
   const parityLine = ((p: GatheredStrategy["parity"]): string => {
     if (p.status === "ok") return "  parity:     the app's quote agrees (POST /api/strategies/quote)";
     if (p.status === "mismatch") return `  parity:     MISMATCH with the app's quote — ${p.checks.filter((c) => !c.ok).map((c) => `${c.field} local ${c.local} vs app ${c.http}`).join("; ")} — do not trust either number until this is understood`;
-    return `  parity:     ${p.status} (${p.reason})`;
+    return `  parity:     ${p.status} (${"reason" in p ? p.reason : ""})`;
   })(g.parity);
   const { res, quote } = g;
   const by = symbolMap(ctx);
