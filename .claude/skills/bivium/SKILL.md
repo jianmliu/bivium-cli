@@ -179,6 +179,42 @@ matches the quote to the atom — if it aborts, read the reason; do not retry bl
 needs the **exact face** in the loan token (principal received is less than face — the difference
 is the interest), and reclaiming collateral is a separate transaction after repay.
 
+## Workflow: strategies (策略工具箱)
+
+A strategy is a NAMED composition of the actions above (fill a bid / eat an ask / fund + at most
+one swap) — never a new primitive. The engine picks the market for the user from a VIEW (asset,
+tenor, strike buffer), and every quote is maturity-only: the payoff has one variable, S_T, and the
+worst case is stated with its FORM (forfeit collateral / deliver collateral / called away /
+assigned). There is no liquidation to model, so the words "liquidation price" never appear.
+
+```bash
+npm run cli --silent -- strategy list                       # catalog: id, name, group, side/line, mirror
+# quote: resolve the nearest strike rung 48% above spot for a 7-day short of mAI, priced off the live book
+npm run cli --silent -- strategy quote --strategy short --asset mAI --size 10000 --maturity <unix> --buffer 48 \
+    --source relayer --sigma 7.11            # borrowers take the best BID, lenders eat the best ASK
+# or price a target rate instead of the book:
+npm run cli --silent -- strategy quote --strategy lendQuote --asset mNVDA --size 1000 --maturity <unix> --buffer 20 --apr-bps 1500
+# plan: the same flags + hard limits; a swap leg needs --min-out; nothing is sent
+npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000 --maturity <unix> --buffer 48 \
+    --source relayer --min-out 1000
+```
+
+- `strategy quote` prints the five confirm-screen numbers — **prepay, premium, WORST CASE (+ form),
+  break-even, P(exercise)** — and a payoff table. Surface all five to the user before anything is
+  spent; the prepay of a borrow-and-sell strategy IS its worst case. Figures are estimates off the
+  pair feed's spot (`spotStatus: stale` is flagged); execution is bounded by `minOut`.
+- `--buffer` is the strike distance from spot in the OTM direction (positive = OTM). When no rung is
+  within tolerance the quote uses the nearest and lists the alternatives — offer them, don't invent
+  a market (see Discovery above).
+- `strategy plan` never executes. Its `mode` is `intent` (single leg), `router` (atomic, needs a
+  Router on the profile) or `sequential` — the last is explicitly NOT atomic (approve → fill → swap
+  are separate txs); say so before running the steps with `borrow execute` / `trade buy`.
+- Pricing off the book (`--source relayer`) needs a RESTING bid (borrower) / ask (lender) on the resolved
+  market; on a thin testnet it will say so — quote a target rate with `--apr-bps <n>` (or `--price <wad>`) instead.
+- `--sigma` (annualised realised vol, e.g. `7.11` = 711%) is advisory: it only feeds P(exercise).
+- Combos (`straddle`, `shortVol`, `collar`, `spread`) are listed but not quotable as one unit until
+  the Router lands — quote each leg separately.
+
 ## Workflow: auto-settle (到期兜底 / borrow-and-forget)
 
 On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
