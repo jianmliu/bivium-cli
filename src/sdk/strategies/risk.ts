@@ -57,14 +57,32 @@ function validValue(key: MarketRiskEvidenceKey, value: unknown): boolean {
   return value > 0;
 }
 
-function validatePolicy(policy: AgentRiskPolicy): void {
+function validateSelectedPolicy(selected: unknown): asserts selected is SelectedRiskPolicy {
+  if (typeof selected !== "object" || selected === null || Array.isArray(selected)) {
+    throw new Error("invalid risk policy: selection must be an object");
+  }
+  const candidate = selected as { source?: unknown; rules?: unknown };
+  if (candidate.source !== "agent-policy" && candidate.source !== "user-policy") {
+    throw new Error("invalid risk policy: source must be agent-policy or user-policy");
+  }
+  if (typeof candidate.rules !== "object" || candidate.rules === null || Array.isArray(candidate.rules)) {
+    throw new Error("invalid risk policy: rules must be an object");
+  }
+  const policy = candidate.rules as Record<string, unknown>;
+  for (const key of ["rejectArbitraryMint", "rejectUnsellable", "confirmOnUnknown"] as const) {
+    if (typeof policy[key] !== "boolean") {
+      throw new Error(`invalid risk policy: ${key} must be a boolean`);
+    }
+  }
   const concentration = policy.maxTop10HolderPct;
   if (concentration !== undefined
-      && (!Number.isFinite(concentration) || concentration < 0 || concentration > 100)) {
+      && (typeof concentration !== "number" || !Number.isFinite(concentration)
+        || concentration < 0 || concentration > 100)) {
     throw new Error("invalid risk policy: maxTop10HolderPct must be finite and between 0 and 100");
   }
   const slippage = policy.maxExitSlippageBps;
-  if (slippage !== undefined && (!Number.isFinite(slippage) || slippage < 0)) {
+  if (slippage !== undefined
+      && (typeof slippage !== "number" || !Number.isFinite(slippage) || slippage < 0)) {
     throw new Error("invalid risk policy: maxExitSlippageBps must be finite and non-negative");
   }
 }
@@ -77,8 +95,8 @@ export function assessRisk(
   input: MarketRiskInput,
   selectedPolicy: SelectedRiskPolicy = DEFAULT_POLICY_SELECTION,
 ): MarketRiskReport {
+  validateSelectedPolicy(selectedPolicy);
   const policy = selectedPolicy.rules;
-  validatePolicy(policy);
   let malformedEvidence = false;
   const evidence = Object.fromEntries(evidenceKeys.map((key) => {
     const datum = input.evidence[key];

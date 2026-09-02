@@ -162,6 +162,27 @@ test("invalid policy thresholds are rejected explicitly", () => {
   }
 });
 
+test("malformed selected policy shape throws before risky evidence can be accepted", () => {
+  const risky = benign();
+  risky.evidence.mintable = observed(true);
+  const malformed: unknown[] = [
+    { source: "admin-policy", rules: { rejectArbitraryMint: true, rejectUnsellable: true, confirmOnUnknown: true } },
+    { source: "user-policy" },
+    { source: "user-policy", rules: null },
+    { source: "user-policy", rules: { rejectUnsellable: true, confirmOnUnknown: true } },
+    { source: "user-policy", rules: { rejectArbitraryMint: "false", rejectUnsellable: true, confirmOnUnknown: true } },
+    { source: "user-policy", rules: { rejectArbitraryMint: true, rejectUnsellable: 1, confirmOnUnknown: true } },
+    { source: "user-policy", rules: { rejectArbitraryMint: true, rejectUnsellable: true, confirmOnUnknown: "false" } },
+  ];
+
+  for (const selectedPolicy of malformed) {
+    assert.throws(
+      () => assessRisk(risky, selectedPolicy as never),
+      /invalid risk policy/i,
+    );
+  }
+});
+
 test("a reject condition wins over unknown evidence deterministically", () => {
   const input = benign();
   input.evidence.sellability = observed(false, "venue check", at);
