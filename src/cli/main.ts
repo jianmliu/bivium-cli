@@ -106,7 +106,7 @@ usage: bivium <command> [options]
   settle disarm (market flags | --offer <file>)
   settle status (market flags | --offer <file>) [--borrower <addr>]        # floor share, cap now, settleable bound
   settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay (names the size)
-    [--via-jit [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]]  # zero-capital via v4 flash
+    [--via-jit | --via-morpho] [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]  # zero-capital: v4 flash accounting, or a Morpho flash loan converted on v4
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
@@ -171,6 +171,7 @@ const OPTIONS = {
   keep: { type: "string" },
   ask: { type: "string" },
   "via-jit": { type: "boolean" },
+  "via-morpho": { type: "boolean" },
   "min-profit": { type: "string" },
   "pool-fee": { type: "string" },
   "pool-spacing": { type: "string" },
@@ -934,10 +935,16 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const ask = typeof ctx.values.ask === "string"
       ? parseAmount(ctx.values.ask, market.collateralDecimals)
       : await sc.maxAsk(freed, market.params.maturity, floor);
-    if (ctx.values["via-jit"]) {
-      // Zero-capital route: the V4JitKeeper funds the repay from a v4 pool's flash accounting and pays this
-      // wallet the surplus. Nothing to hold, nothing to approve — an unprofitable settle reverts whole.
-      const jit = ctx.profile.v4JitKeeper ?? fail("profile has no v4JitKeeper for this chain");
+    if (ctx.values["via-jit"] && ctx.values["via-morpho"]) fail("choose one of --via-jit / --via-morpho");
+    if (ctx.values["via-jit"] || ctx.values["via-morpho"]) {
+      // Zero-capital routes. --via-jit: the V4JitKeeper funds the repay from a v4 pool's flash accounting.
+      // --via-morpho: the MorphoJitFunder flash-borrows from Morpho Blue and only converts on the pool — for loan
+      // legs whose depth is in Morpho. Either way this wallet holds nothing, approves nothing, and collects the
+      // surplus; an unprofitable settle reverts whole.
+      const viaMorpho = ctx.values["via-morpho"] === true;
+      const wrapper = viaMorpho
+        ? (ctx.profile.morphoJitFunder ?? fail("profile has no morphoJitFunder for this chain"))
+        : (ctx.profile.v4JitKeeper ?? fail("profile has no v4JitKeeper for this chain"));
       const minProfit = typeof ctx.values["min-profit"] === "string"
         ? parseAmount(ctx.values["min-profit"], market.loanDecimals) : 0n;
       const key = poolKeyFor(
@@ -945,9 +952,12 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
         Number(ctx.values["pool-fee"] ?? 3000), Number(ctx.values["pool-spacing"] ?? 60),
         getAddress((ctx.values["pool-hooks"] as string | undefined) ?? "0x0000000000000000000000000000000000000000") as Address,
       );
-      const tx = await sc.settleWithFlash(jit, market.params, borrower, ask, key, minProfit);
-      output(ctx.json, { settled: true, viaJit: true, repaid: formatAmount(position.debt, market.loanDecimals), ask: formatAmount(ask, market.collateralDecimals), tx: tx.hash },
-        `settled via v4 flash: repaid ${formatAmount(position.debt, market.loanDecimals)} loan with the pool's money, ask ${formatAmount(ask, market.collateralDecimals)} collateral, surplus to this wallet (${tx.hash})`);
+      const tx = viaMorpho
+        ? await sc.settleWithMorpho(wrapper, market.params, borrower, ask, key, minProfit)
+        : await sc.settleWithFlash(wrapper, market.params, borrower, ask, key, minProfit);
+      const route = viaMorpho ? "Morpho flash loan, converted on v4" : "v4 flash";
+      output(ctx.json, { settled: true, viaJit: !viaMorpho, viaMorpho, repaid: formatAmount(position.debt, market.loanDecimals), ask: formatAmount(ask, market.collateralDecimals), tx: tx.hash },
+        `settled via ${route}: repaid ${formatAmount(position.debt, market.loanDecimals)} loan with borrowed money, ask ${formatAmount(ask, market.collateralDecimals)} collateral, surplus to this wallet (${tx.hash})`);
       return;
     }
     // The keeper fronts the debt it just read and names that size on-chain: approve exactly it, then settle. If

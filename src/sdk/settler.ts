@@ -35,6 +35,12 @@ export const jitKeeperAbi = parseAbi([
   "function settleWithFlash((uint256 chainId,address bivium,address loanToken,address collateralToken,uint256 maturity,uint256 strike,bool allowPartialRepay,address gate) params, address borrower, uint256 collateralAsk, (address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key, uint256 minProfit) returns (uint256)",
 ]);
 
+// MorphoJitFunder: Morpho Blue's fee-less flash loan funds the repay, the v4 pool only converts the collateral
+// back. Same call shape as the keeper; use it where the loan leg's depth is in Morpho rather than in the v4 pool.
+export const morphoFunderAbi = parseAbi([
+  "function settleWithMorpho((uint256 chainId,address bivium,address loanToken,address collateralToken,uint256 maturity,uint256 strike,bool allowPartialRepay,address gate) params, address borrower, uint256 collateralAsk, (address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key, uint256 minProfit) returns (uint256)",
+]);
+
 export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
 
 /** A v4 pool key holds the SORTED pair; which market leg is currency0 is byte order, not a choice. */
@@ -135,5 +141,11 @@ export class SettlerClient extends BiviumClient {
    *  the collateral back through the same pool and sends the surplus to the caller. No funds, no approvals. */
   settleWithFlash(jit: Address, params: MarketParams, borrower: Address, collateralAsk: bigint, key: PoolKey, minProfit: bigint) {
     return this.write({ address: jit, abi: jitKeeperAbi, functionName: "settleWithFlash", args: [this.fullParams(params), borrower, collateralAsk, key, minProfit] });
+  }
+
+  /** Keeper-side, zero-capital, Morpho-funded: the MorphoJitFunder flash-borrows the debt from Morpho Blue,
+   *  settles, converts the collateral on the v4 pool, repays Morpho and sends the surplus to the caller. */
+  settleWithMorpho(funder: Address, params: MarketParams, borrower: Address, collateralAsk: bigint, key: PoolKey, minProfit: bigint) {
+    return this.write({ address: funder, abi: morphoFunderAbi, functionName: "settleWithMorpho", args: [this.fullParams(params), borrower, collateralAsk, key, minProfit] });
   }
 }
