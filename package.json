@@ -1,11 +1,28 @@
 {
   "name": "@bivium/cli",
   "version": "0.1.0",
-  "description": "SDK + CLI for the Bivium fixed-rate credit primitive (core-v1 ABI lineage)",
+  "description": "SDK + CLI for the Bivium fixed-rate credit primitive (core-v1 and core-v2 ABI lineages)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jianmliu/bivium-cli.git"
+  },
   "type": "module",
   "license": "MIT",
-  "bin": { "bivium": "./bin/bivium.mjs", "bivium-mcp": "./bin/bivium-mcp.mjs" },
-  "exports": { ".": "./src/sdk/index.ts" },
+  "bin": {
+    "bivium": "./bin/bivium.mjs",
+    "bivium-mcp": "./bin/bivium-mcp.mjs"
+  },
+  "exports": {
+    ".": "./src/sdk/index.ts",
+    "./strategies": "./src/sdk/strategies/pure.ts"
+  },
+  "files": [
+    "bin",
+    "src",
+    "profiles",
+    "skills",
+    "README.md"
+  ],
   "scripts": {
     "cli": "tsx src/cli/main.ts",
     "mcp": "tsx src/mcp/server.ts",
