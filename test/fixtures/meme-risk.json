@@ -1,0 +1,10 @@
+{
+  "market": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "collateralKind": "meme",
+  "evidence": {
+    "mintable": { "state": "observed", "value": true, "source": "fixture" },
+    "sellability": { "state": "unknown", "source": "fixture" }
+  },
+  "principal": "1000000",
+  "collateralValueAtEntry": "1000000"
+}

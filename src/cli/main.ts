@@ -61,6 +61,7 @@ import {
   type Offer,
 } from "../sdk/index.ts";
 import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor, maxSettleableKeptBps, poolKeyFor } from "../sdk/settler.ts";
+import { runStrategyCommand } from "./strategy.ts";
 
 const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
@@ -97,6 +98,10 @@ usage: bivium <command> [options]
   wallet address|balance [--key-file <f> | --account <addr>]
   wallet gas --to <addr> [--via-api]  # third-party claim; --via-api needs no local key at all
   wizard                              # interactive wizard: lend / borrow / trade
+
+  strategy catalog --json
+  strategy assess --risk-file <json> --json
+  strategy trace --strategy-id <id> --quote-id <bytes32> --nonce <n> --account <addr> --json
 
   vault activate --sats <sats> [--vault-id <bytes32>] [--depositor <addr>]   # testnet mock faucet
   vault list [--account <addr>]
@@ -175,6 +180,10 @@ const OPTIONS = {
   "dry-run": { type: "boolean", default: false },
   publish: { type: "boolean", default: false },
   maker: { type: "string" },
+  "risk-file": { type: "string" },
+  "strategy-id": { type: "string" },
+  "quote-id": { type: "string" },
+  nonce: { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -756,6 +765,9 @@ async function wizardTrade(ctx: Ctx, rl: Asker): Promise<void> {
 }
 
 const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
+  "strategy catalog": async (ctx) => output(ctx.json, runStrategyCommand("catalog", ctx) as Record<string, unknown>, ""),
+  "strategy assess": async (ctx) => output(ctx.json, runStrategyCommand("assess", ctx) as Record<string, unknown>, ""),
+  "strategy trace": async (ctx) => output(ctx.json, runStrategyCommand("trace", ctx) as Record<string, unknown>, ""),
   "market list": async (ctx) => {
     const c = client(ctx, false);
     const source = typeof ctx.values.source === "string" ? ctx.values.source : "chain";
