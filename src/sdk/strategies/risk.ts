@@ -95,6 +95,9 @@ export function assessRisk(
   input: MarketRiskInput,
   selectedPolicy: SelectedRiskPolicy = DEFAULT_POLICY_SELECTION,
 ): MarketRiskReport {
+  if (typeof input.market !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(input.market)) {
+    throw new Error("invalid risk market id: expected bytes32 hex");
+  }
   validateSelectedPolicy(selectedPolicy);
   const policy = selectedPolicy.rules;
   let malformedEvidence = false;

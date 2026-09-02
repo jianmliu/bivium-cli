@@ -251,13 +251,13 @@ export interface SelectedRiskPolicy {
 }
 
 export interface MarketRiskInput {
-  market: string;
+  market: Hex;
   collateralKind: CollateralKind;
   evidence: Partial<MarketRiskEvidence>;
 }
 
 export interface MarketRiskReport {
-  market: string;
+  market: Hex;
   facts: Array<{ key: string; value: unknown; source?: string; observedAt?: string }>;
   warnings: RiskWarning[];
   unknowns: string[];

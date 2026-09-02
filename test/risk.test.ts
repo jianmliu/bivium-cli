@@ -9,10 +9,11 @@ import {
 } from "../src/sdk/strategies/index.ts";
 
 const at = "2026-09-02T12:00:00.000Z";
+const market = "0xa73025af79195463e4058823db7646c752a00cd5d616560fc99b615020e8d43e" as const;
 
 function benign(overrides: Partial<MarketRiskInput> = {}): MarketRiskInput {
   return {
-    market: "0xmarket",
+    market,
     collateralKind: "stock-token",
     evidence: {
       mintable: observed(false, "issuer docs", at),
@@ -27,6 +28,15 @@ function benign(overrides: Partial<MarketRiskInput> = {}): MarketRiskInput {
     ...overrides,
   };
 }
+
+test("malformed market ids fail closed at the risk assessment boundary", () => {
+  for (const malformed of ["0xmarket", "0x01", `0x${"g".repeat(64)}`]) {
+    assert.throws(
+      () => assessRisk(benign({ market: malformed as never })),
+      /invalid risk market id/i,
+    );
+  }
+});
 
 test("unknown sellability requires user confirmation rather than passing", () => {
   const input = benign();

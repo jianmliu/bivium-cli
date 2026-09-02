@@ -5,6 +5,7 @@
 //   sequential — a swap leg but NO Router → approve → fill → swap as separate txs, explicitly non-atomic.
 // This module only BUILDS the plan (data). Execution stays with the existing client / trade paths.
 import { encodeAbiParameters, keccak256 } from "viem";
+import { computeMarketId } from "../market.ts";
 import type { Address, Hex, Offer } from "../types.ts";
 import type { MarketRiskReport, Plan, PlanStep, StrategyQuote, StrategyResolution } from "./types.ts";
 
@@ -22,6 +23,15 @@ export interface PlanOptions {
   riskReport?: MarketRiskReport;
 }
 
+function sameMarketId(left: unknown, right: unknown): boolean {
+  const bytes32 = /^0x[0-9a-fA-F]{64}$/;
+  return typeof left === "string"
+    && typeof right === "string"
+    && bytes32.test(left)
+    && bytes32.test(right)
+    && left.toLowerCase() === right.toLowerCase();
+}
+
 export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigint): Hex {
   return keccak256(
     encodeAbiParameters(
@@ -32,7 +42,14 @@ export function quoteId(res: StrategyResolution, quote: StrategyQuote, now: bigi
 }
 
 export function buildPlan(res: StrategyResolution, quote: StrategyQuote, opts: PlanOptions): Plan {
-  if (opts.riskReport && opts.riskReport.market !== quote.marketId) {
+  const resolvedMarketId = computeMarketId(res.row.market.params);
+  if (!sameMarketId(quote.marketId, resolvedMarketId)) {
+    throw new Error("quote market does not match resolution");
+  }
+  if (quote.strategyId !== res.strategy.id) {
+    throw new Error("quote strategy does not match resolution");
+  }
+  if (opts.riskReport && !sameMarketId(opts.riskReport.market, quote.marketId)) {
     throw new Error("risk report market does not match quote");
   }
   if (opts.riskReport?.decision === "reject") throw new Error("risk policy rejected this plan");

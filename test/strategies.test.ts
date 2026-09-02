@@ -155,9 +155,15 @@ test("quote + plan: the confirm-screen numbers and a bounded plan whose maxLoss 
     ...overrides,
   });
   assert.throws(
-    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ market: "0x01" }) }),
+    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ market: `0x${"00".repeat(32)}` as typeof q.marketId }) }),
     /risk report market does not match quote/,
   );
+  assert.throws(
+    () => buildPlan(res, q, { now: NOW, core, riskReport: report({ market: undefined as never }) }),
+    /risk report market does not match quote/,
+  );
+  const upperCaseMarketId = `0x${q.marketId.slice(2).toUpperCase()}` as typeof q.marketId;
+  assert.equal(buildPlan(res, q, { now: NOW, core, riskReport: report({ market: upperCaseMarketId }) }).riskDecision, "accept");
   assert.throws(
     () => buildPlan(res, q, { now: NOW, core, riskReport: report({ decision: "reject", decisionSource: "agent-policy" }) }),
     /risk policy rejected this plan/,
@@ -171,6 +177,16 @@ test("quote + plan: the confirm-screen numbers and a bounded plan whose maxLoss 
   assert.equal(accepted.riskDecision, "accept");
   assert.deepEqual(accepted.riskWarnings, ["collateral can be frozen"]);
   assert.equal(accepted.quoteId, seq.quoteId);
+
+  const otherRes = resolveStrategy({ strategyId: "short", asset: mAI, size: N, maturity: MATURITY, bufferPct: 80 }, [row(K25)], S0);
+  assert.throws(
+    () => buildPlan(otherRes, q, { now: NOW, core }),
+    /quote market does not match resolution/,
+  );
+  assert.throws(
+    () => buildPlan(res, { ...q, strategyId: "lendAsset" }, { now: NOW, core }),
+    /quote strategy does not match resolution/,
+  );
 
   const router = "0x0000000000000000000000000000000000000d01" as Address;
   const atomic = buildPlan(res, q, { now: NOW, core, router, swap: { sellToken: mAI, buyToken: bUSD, minOut: 1_000_000_000n } });
