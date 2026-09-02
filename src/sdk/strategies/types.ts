@@ -160,6 +160,16 @@ export interface StrategyQuote {
   estimateBasis: "spot";
 }
 
+/** Reporting metadata that follows a strategy from quote through execution. */
+export interface StrategyTrace {
+  strategyId: string;
+  account: Address;
+  quoteId: Hex;
+  intentId: Hex;
+  orderId?: Hex;
+  fillId?: Hex;
+}
+
 export interface PlanLimits {
   /** Hard cap on what the user can lose: exceeding it reverts on-chain (Router) or aborts (sequential). */
   maxLoss: bigint;
