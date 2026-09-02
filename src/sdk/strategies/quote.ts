@@ -30,7 +30,9 @@ function quoteWithoutProbability(q: QuoteInputs, size: bigint): Omit<StrategyQuo
   const dec = { assetDecimals: r.assetDecimals, numeraireDecimals: r.numeraireDecimals };
   const base = {
     strategyId: r.strategy.id,
-    marketId: computeMarketId(r.row.market.params),
+    // The caller passes the lineage-correct id (core-v2 binds chainId + core into it); the bare v1 hash is only
+    // the fallback for callers without a profile, and it is NOT what a core-v2 deployment recognises.
+    marketId: q.marketId ?? computeMarketId(r.row.market.params),
     maturity: r.row.market.params.maturity,
     side: r.side,
     asset: r.asset,

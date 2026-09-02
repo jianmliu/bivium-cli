@@ -91,3 +91,15 @@ test("gather: input validation", async () => {
   await assert.rejects(gatherStrategyInputs(profile, undefined, { strategy: "short", asset: "bUSD", size: "1", maturity: MATURITY, bufferPct: 48, now: NOW, rows: [row(K20)], spot }), /no options-line market carries/);
   await assert.rejects(gatherStrategyInputs(profile, undefined, { strategy: "nope", asset: "mAI", size: "1", maturity: MATURITY, bufferPct: 48, now: NOW, rows: [row(K20)], spot }), /unknown strategy/);
 });
+
+test("gather: the quote's market id follows the profile's lineage — core-v2 binds chainId + core, core-v1 is the bare hash", async () => {
+  const { computeMarketId } = await import("../src/sdk/market.ts");
+  const { computeMarketIdV2 } = await import("../src/sdk/lineage.ts");
+  const base = { strategy: "short", asset: "mAI", size: "10000", maturity: MATURITY, bufferPct: 48, priceWad: 768_200_000_000_000_000n, now: NOW, rows: [row(K20)], spot, parity: false as const };
+  const v1 = await gatherStrategyInputs(profile, undefined, base);
+  assert.equal(v1.quote.marketId, computeMarketId(row(K20).market.params));
+  const v2Profile: DeploymentProfile = { ...profile, abiProfile: "core-v2", chainId: 46630, core: "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4" as Address };
+  const v2 = await gatherStrategyInputs(v2Profile, undefined, base);
+  assert.equal(v2.quote.marketId, computeMarketIdV2({ chainId: 46630, core: v2Profile.core }, row(K20).market.params));
+  assert.notEqual(v2.quote.marketId, v1.quote.marketId); // the bare hash is not what a core-v2 deployment recognises
+});

@@ -141,6 +141,8 @@ export interface QuoteInputs {
   now: bigint;
   /** Levered-long / protective-put only: face to borrow (numeraire native). Default = max at strike. */
   borrowFace?: bigint;
+  /** The market id in the deployment's lineage (`adapterFor(abiProfile).computeMarketId(domain, params)`). */
+  marketId?: Hex;
 }
 
 export interface StrategyQuote {
