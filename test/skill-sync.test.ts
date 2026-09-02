@@ -63,4 +63,21 @@ test("the distributable skill and the repo-local skill are the same file", () =>
     assert.doesNotMatch(document, /\bclaim\b[^\n]*--key-file "\$KEY_FILE"/i);
     assert.doesNotMatch(document, /--private-key\b/i, "public instructions must never put a private key in CLI arguments");
   }
+
+  for (const retainedReference of [
+    /## Choosing a runtime/i,
+    /## Sandboxed agents \(Docker\)/i,
+    /## Safety model/i,
+    /maker make-offer/i,
+    /borrow quote/i,
+    /repay[^\n]*reclaim/i,
+    /## Whole-lot vault app/i,
+    /## DCN secondary trading/i,
+    /trade buy/i,
+    /strategy catalog --json/i,
+    /strategy assess/i,
+    /strategy trace/i,
+  ]) {
+    assert.match(readme, retainedReference, `README must retain ${retainedReference}`);
+  }
 });

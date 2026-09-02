@@ -147,6 +147,148 @@ HOLDER_KEY_FILE='holder.key'
 npm run cli --silent -- claim "${MARKET_ARGS[@]}" --units "$FACE" --key-file "$HOLDER_KEY_FILE" --json
 ```
 
+## Choosing a runtime — `./bivium-run`
+
+The launcher controls where the CLI process runs; it does not change the permitted chain. All
+modes below still use `profiles/robinhood-testnet.json` and Robinhood Chain testnet `46630`:
+
+```bash
+./bivium-run --runtime local market list       # Node process on this machine
+./bivium-run --runtime docker market list      # persistent sandbox container
+./bivium-run market list                       # auto-select Docker or local process
+./bivium-run --runtime docker shell            # interactive sandbox shell
+```
+
+Docker mode builds and reuses the `bivium-agent` container. `BIVIUM_PROFILE` is forwarded, and an
+absolute host profile path is copied into the container. A `--key-file` path in Docker refers to
+the container filesystem; generate keys inside the sandbox instead of copying host keys into it.
+`BIVIUM_RUNTIME=local|docker|auto` sets the launcher default.
+
+## Sandboxed agents (Docker)
+
+The image needs only network egress to the Robinhood testnet RPC and configured Pages relayer:
+
+```bash
+docker build -t bivium-cli .
+docker run --rm -e BIVIUM_PROFILE=profiles/robinhood-testnet.json bivium-cli market list --json
+docker run --rm -it --entrypoint bash bivium-cli
+```
+
+Inside the container, `wallet create` → `wallet gas --via-api` → testnet action works without host
+secrets. A borrower position is bound to the signer that opened it. For positions spanning
+sessions, keep the borrower key in a persistent named container or named volume:
+
+```bash
+docker run -d --name bivium-agent --entrypoint sleep bivium-cli infinity
+docker exec -it bivium-agent bash
+docker stop bivium-agent && docker start bivium-agent
+
+docker volume create bivium-keys
+docker run --rm -it -v bivium-keys:/home/bivium/keys --entrypoint bash bivium-cli
+```
+
+Use a one-shot `--rm` container only for read-only work or a lifecycle that opens and closes in the
+same session. Removing the only copy of a borrower key before close makes repay/reclaim unavailable
+to that borrower. A DCN holder separately preserves its own key until transfer or claim.
+
+## Throwaway wallets and gas
+
+Prefer a fresh key file over importing a long-lived key. `wallet create --out agent.key` writes
+mode `0600`; `wallet address --key-file agent.key` derives its address. Robinhood testnet's profile
+contains `gasFaucet` and `gasApi`, so `wallet gas --to "$ADDRESS" --via-api` can request test gas.
+The faucet drip is 0.0002 ETH and refuses recipients already holding at least 0.001 ETH. Never
+commit, mount from an untrusted host path, log, print, or echo a signing key.
+
+## Safety model (enforced in the SDK)
+
+- **Profile pinning, fail closed:** each run pins `{chainId, core, signatureRatifier, abiProfile}`;
+  `verifyProfile()` checks the Core's `computeId` against the local market hash before a write.
+- **Exact integer math:** strikes, prices, and amounts use `BigInt`; the SDK mirrors Core's floor
+  principal and ceil collateral rounding.
+- **Simulate first:** writes use exact allowances and balance-delta postconditions.
+- **Ratification precheck:** an offer is emitted or accepted only when its commitment returns the
+  `RATIFIED` magic value.
+- **Signer isolation:** key files are permission-checked and supplied only to the specific write.
+  Read-only commands do not need a signer.
+
+## Base market lifecycle
+
+Lenders escrow loan tokens with `maker fund` and create signed buy offers with
+`maker make-offer`. Borrowers take those offers, receive principal, and lock collateral. Before
+maturity, repayment requires the exact face amount, followed by a separate reclaim transaction.
+At or after maturity, current DCN holders claim their pro-rata loan-token/collateral settlement.
+
+```bash
+# Lender setup/writes use the lender's own key file.
+LENDER_KEY_FILE='lender.key'
+npm run cli --silent -- maker set-ratifier --key-file "$LENDER_KEY_FILE" --json
+npm run cli --silent -- maker fund "${MARKET_ARGS[@]}" --assets '600' --key-file "$LENDER_KEY_FILE" --json
+npm run cli --silent -- maker make-offer "${MARKET_ARGS[@]}" --side buy --apr-bps '1000' \
+  --max-units '600' --out bid.json --key-file "$LENDER_KEY_FILE" --json
+
+# Reads/previews require no signer.
+npm run cli --silent -- market state --offer bid.json --json
+npm run cli --silent -- borrow quote --offer bid.json --units '100' --json
+```
+
+Offer APR is derived from the tick and remaining term; `--tick` selects a grid point directly.
+`--publish` also sends the signed offer to the configured relayer. The onchain consumption value,
+not relayer listing state, is authoritative for fill capacity and cancellation.
+
+## Whole-lot vault app (vaultBTC / TBVBTC)
+
+The `vault` command group supports a `BiviumVaultApp` family when a profile has a verified
+`vaultApp` section (`registry`, `app`, `vaultBtc`, `escrow`, `tbvbtc`, and `appBlock`). The current
+Robinhood testnet public profile does **not** configure that section, so vault commands are feature
+reference only and are not executable in the public agent release.
+
+The preserved lifecycle semantics are:
+
+- `vault activate` creates a Reserved whole lot in mock-enabled deployments.
+- `vault borrow` escrows the whole group into one lender bid; after Core `repay` and `reclaim`,
+  `vault release` clears the binding.
+- `vault convert` locks vaultBTC and mints equal TBVBTC; `vault unconvert` burns equal TBVBTC to
+  return the same vault as Reserved; `vault reclaim` exits an unbound lot.
+- `vault mark-delivered` records an unpaid matured lot as Delivered. A keeper can settle by burning
+  TBVBTC, while the redemption book uses `vault redemption post|list|cancel` and
+  `vault keeper fill`.
+- `vault invariant` checks `vaultBTC.balanceOf(escrow) == TBVBTC.totalSupply()`.
+
+Vault amounts are integer sats. Whole-lot face math uses exact `BigInt`; write preflights mirror
+app guards and verify the expected `Borrowed` event and loan-token delta.
+
+## DCN secondary trading (order book, sweeps, relayer)
+
+The `book`, `trade`, and `order` groups trade existing DCN credit. A maker sell offer transfers
+credit it already holds; a maker buy offer buys credit using pre-funded liquidity. Books come from
+strictly validated signed-offer files or the configured relayer. Relayer failure means unknown
+liquidity, never an empty book, and one malformed row invalidates the batch.
+
+```bash
+# Read and preview without a signer.
+npm run cli --silent -- book list "${MARKET_ARGS[@]}" --source relayer --depth '10' --json
+npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
+  --limit-tick '3900' --source relayer --dry-run --json
+
+# After a fresh preview and explicit holder signature, execute with that holder's key.
+npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
+  --limit-tick '3900' --source relayer --key-file "$HOLDER_KEY_FILE" --json
+npm run cli --silent -- order cancel --offer ask.json --key-file "$HOLDER_KEY_FILE" --json
+```
+
+Sweeps are one atomic Core multicall. Buy fills ceil cost toward the resting maker; sell fills floor
+proceeds toward the resting maker. `--limit-tick` bounds the worst execution price and
+`--exact-spend` refuses partial budget absorption. Postconditions require exact credit and cash
+deltas. Selling DCN stays legal after maturity because it transfers existing credit rather than
+originating debt.
+
+## ABI lineages
+
+The adapter retains `core-v1` (6-field market / 15-field offer) and domain-bound `core-v2`
+(8-field market / 17-field offer) support for historical compatibility and golden-vector tests.
+Those historical deployments are not executable public targets. Robinhood Chain testnet `46630`
+uses `core-v2`; its market IDs and offer commitments include the chain/Core domain.
+
 ## Development
 
 ```bash
