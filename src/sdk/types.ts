@@ -62,6 +62,12 @@ export interface DeploymentProfile {
   v4JitKeeper?: Address;
   /** MorphoJitFunder: the same zero-capital settle, funded by a Morpho Blue flash loan and converted on v4. */
   morphoJitFunder?: Address;
+  /** StrategyRouter: one `execute(Leg[])` for a whole strategy; absent = not deployed on this chain. */
+  strategyRouter?: Address;
+  /** Uniswap v4 Quoter — a depth-aware floor for a swap leg. Absent: fall back to the pool's current price. */
+  v4Quoter?: Address;
+  /** Uniswap v4 StateView — the pool's current price, the marginal (and optimistic) floor. */
+  v4StateView?: Address;
   coreDeploymentBlock?: number;
 }
 

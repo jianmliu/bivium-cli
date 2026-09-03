@@ -62,6 +62,12 @@ import {
 } from "../sdk/index.ts";
 import { fetchStrategyPositions } from "../sdk/strategies/http.ts";
 import { SettlerClient, grantCoversSettler, keepPercentToBps, maxSettleableFloor, maxSettleableKeptBps, poolKeyFor } from "../sdk/settler.ts";
+import { StrategyRouterClient, programNeedsGrant } from "../sdk/strategyRouter.ts";
+import { buildOpenProgram, buildUnwindProgram, defaultUnwindVia, fillCost, type Leg } from "../sdk/strategies/program.ts";
+import { poolKeyCarries, swapCeiling, swapFloor } from "../sdk/strategies/pools.ts";
+import { classifyLine, orientation } from "../sdk/strategies/lines.ts";
+import { getStrategy } from "../sdk/strategies/catalog.ts";
+import { computeMarketId } from "../sdk/market.ts";
 import { runStrategyCommand } from "./strategy.ts";
 import {
   STRATEGIES,
@@ -100,6 +106,10 @@ usage: bivium <command> [options]
   strategy quote --strategy <id> --asset <symbol|addr> [--counter <symbol|addr>] --size <human> --maturity <unix> --buffer <pct>
                  [--apr-bps <n> | --price <wad> | (--source relayer)] [--sigma <annual vol>] [--source chain --from-block N --chunk-blocks N]
   strategy plan  (same flags) [--router <addr>] [--min-out <human>] [--ttl <s>]   # bounded plan: maxLoss/minOut/deadline; never executes
+  strategy program --strategy <id> --offer <file> --units <human> [--router <addr>]      # the StrategyRouter leg program, built and printed
+                   [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0] [--min-out <human>] [--slippage-bps 100]
+                   [--unwind (market flags) --assets <human> [--via wallet|flash] [--max-settle-in <human>]]
+  strategy execute (the same flags) [--deadline <unix>]                                 # grant once, approve exactly, send it
   strategy positions --taker <addr>          # holdings read as strategies, from the app's /api/strategies/positions
   repay (--offer <file> | market flags) --assets <human>
   reclaim (--offer <file> | market flags) [--receiver <addr>]
@@ -212,6 +222,10 @@ const OPTIONS = {
   router: { type: "string" },
   "min-out": { type: "string" },
   "chunk-blocks": { type: "string" },
+  "slippage-bps": { type: "string" },
+  "max-settle-in": { type: "string" },
+  unwind: { type: "boolean" },
+  via: { type: "string" },
 } as const;
 
 function fail(message: string): never {
@@ -263,6 +277,142 @@ function fmtStrikeUnit(floor: string, loanSym: string, collSym: string): string 
   const base = `${floor} ${loanSym}/${collSym}`;
   if (Number.isFinite(value) && value > 0 && value < 1) return `${base} (= ${(1 / value).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${collSym} per ${loanSym})`;
   return base;
+}
+
+/** A StrategyRouter program from the CLI's flags: the offer decides the market, the strategy decides the shape,
+ *  and the pool decides the one number that is not already fixed — the swap's floor. Nothing is sent here. */
+async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
+  client: StrategyRouterClient;
+  legs: Leg[];
+  deadline: bigint;
+  grantExpiry: bigint;
+  approvals: [Address, bigint][];
+  json: Record<string, unknown>;
+  human: string[];
+}> {
+  const v = ctx.values;
+  const router = getAddress(
+    typeof v.router === "string" ? v.router : (ctx.profile.strategyRouter ?? fail("no --router and the profile has no strategyRouter for this chain")),
+  ) as Address;
+  const c = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, router);
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const deadline = typeof v.deadline === "string" ? BigInt(v.deadline) : nowSec + 600n;
+  const grantExpiry = typeof v.ttl === "string" ? nowSec + BigInt(v.ttl) : 0n;
+  if (ctx.profile.abiProfile !== "core-v2") fail("the StrategyRouter is core-v2 periphery; this profile is core-v1");
+  const domain = { chainId: ctx.profile.chainId, core: ctx.profile.core };
+  const slippageBps = Number(v["slippage-bps"] ?? 100);
+  const poolFee = Number(v["pool-fee"] ?? 3000);
+  const poolSpacing = Number(v["pool-spacing"] ?? 60);
+  const poolHooks = getAddress((v["pool-hooks"] as string | undefined) ?? ZERO_ADDRESS) as Address;
+
+  if (v.unwind === true) {
+    const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
+    const assets = parseAmount(need(v.assets as string | undefined, "assets"), loanDecimals);
+    const via = v.via === "wallet" ? "wallet" : v.via === "flash" || v.via === undefined ? "flash" : fail("--via is wallet or flash");
+    const key = poolKeyFor(params.collateralToken, params.loanToken, poolFee, poolSpacing, poolHooks);
+    let maxSettleIn: bigint | undefined;
+    let ceiling: Awaited<ReturnType<typeof swapCeiling>> | undefined;
+    if (via === "flash") {
+      ceiling = await swapCeiling({
+        call: c.ethCall, key, tokenIn: params.collateralToken, amountOut: assets, slippageBps,
+        explicit: typeof v["max-settle-in"] === "string" ? parseAmount(v["max-settle-in"], collateralDecimals) : undefined,
+        stateView: ctx.profile.v4StateView,
+      });
+      maxSettleIn = ceiling.maxIn;
+    }
+    const legs = buildUnwindProgram({ domain, params, assets, via, poolKey: key, maxSettleIn });
+    const approvals: [Address, bigint][] = via === "wallet" ? [[params.loanToken, assets]] : [];
+    return {
+      client: c, legs, deadline, grantExpiry, approvals,
+      json: {
+        router, mode: "unwind", via, assets: assets.toString(), deadline: deadline.toString(),
+        ceiling: ceiling ? { maxIn: ceiling.maxIn.toString(), source: ceiling.source, estimate: ceiling.estimate.toString(), slippageBps: ceiling.slippageBps } : null,
+        legs: legs.map((l) => ({ kind: l.kind, data: l.data })),
+      },
+      human: [
+        `unwind via ${via}: ${formatAmount(assets, loanDecimals)} face on ${params.collateralToken}/${params.loanToken}`,
+        via === "flash"
+          ? `  the buy-back may consume at most ${formatAmount(maxSettleIn!, collateralDecimals)} collateral (${ceiling!.source})`
+          : `  the repayment comes from the wallet: ${formatAmount(assets, loanDecimals)} approved to the router`,
+        `  ${legs.length} leg(s), deadline ${deadline}`,
+      ],
+    };
+  }
+
+  const strategy = getStrategy(need(v.strategy as string | undefined, "strategy"));
+  const file = parseSignedOfferFile(readFileSync(need(v.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+  const params = marketParamsFromOffer(file.offer);
+  const loanDecimals = await tokenDecimals(ctx, params.loanToken);
+  const collateralDecimals = await tokenDecimals(ctx, params.collateralToken);
+  const units = parseAmount(need(v.units as string | undefined, "units"), loanDecimals);
+  const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), sym]));
+  const row = {
+    // `orientation` reads only the params; the block a market was first seen in is a discovery fact this path has
+    // no use for, so it is stated as zero rather than looked up.
+    market: { id: computeMarketId(params), params, firstSeenBlock: 0n },
+    loanSymbol: bySymbol.get(params.loanToken.toLowerCase()),
+    collateralSymbol: bySymbol.get(params.collateralToken.toLowerCase()),
+    loanDecimals,
+    collateralDecimals,
+  };
+  const line = classifyLine(row.loanSymbol, row.collateralSymbol);
+  if (line !== strategy.line) {
+    fail(`${strategy.id} is a ${strategy.line}-line strategy and this offer's market is ${line}`);
+  }
+  const o = orientation(line, row);
+  const view = { strategy, strike: params.strike, asset: o.asset, numeraire: o.numeraire, line };
+
+  const carriesSwap = strategy.requires.includes("swap");
+  const key = poolKeyFor(params.collateralToken, params.loanToken, poolFee, poolSpacing, poolHooks);
+  let floor: Awaited<ReturnType<typeof swapFloor>> | undefined;
+  if (carriesSwap) {
+    if (!poolKeyCarries(key, params.loanToken, params.collateralToken)) fail("the pool key does not name this market's pair");
+    // The swap spends what the fill produced, so its input is the principal after the router's fee.
+    const feeBps = await c.feeBps().catch(() => 0n);
+    const cost = fillCost(file.offer, units);
+    const { principalAfterFee } = await c.quoteLeg(units, cost).catch(() => ({ fee: 0n, principalAfterFee: cost }));
+    const tokenIn = strategy.id === "leveredLong" ? o.numeraire : o.asset;
+    const inDecimals = tokenIn.toLowerCase() === params.loanToken.toLowerCase() ? loanDecimals : collateralDecimals;
+    const outDecimals = inDecimals === loanDecimals ? collateralDecimals : loanDecimals;
+    floor = await swapFloor({
+      call: c.ethCall, key, tokenIn, amountIn: principalAfterFee, slippageBps,
+      explicit: typeof v["min-out"] === "string" ? parseAmount(v["min-out"], outDecimals) : undefined,
+      quoter: ctx.profile.v4Quoter, stateView: ctx.profile.v4StateView,
+    });
+    void feeBps;
+  }
+  const feeBps = await c.feeBps().catch(() => 0n);
+  const build = buildOpenProgram(view, {
+    domain,
+    offer: file.offer,
+    ratifierData: file.signature,
+    units,
+    poolKey: carriesSwap ? key : undefined,
+    minOut: floor?.minOut,
+    feeBps,
+  });
+  // What the router may draw from the account: the collateral top-up on a bid, the cost on an ask.
+  const approvals: [Address, bigint][] = file.offer.buy
+    ? [[params.collateralToken, build.derived.maxTopUp]]
+    : [[params.loanToken, build.derived.cost]];
+  return {
+    client: c, legs: build.legs, deadline, grantExpiry, approvals,
+    json: {
+      router, mode: "open", strategy: strategy.id, market: row.market.id, line,
+      asset: o.asset, numeraire: o.numeraire, deadline: deadline.toString(),
+      derived: Object.fromEntries(Object.entries(build.derived).map(([k, x]) => [k, x.toString()])),
+      swap: floor ? { minOut: floor.minOut.toString(), source: floor.source, estimate: floor.estimate.toString(), slippageBps: floor.slippageBps } : null,
+      approvals: approvals.map(([token, amount]) => ({ token, amount: amount.toString() })),
+      legs: build.legs.map((l) => ({ kind: l.kind, data: l.data })),
+    },
+    human: [
+      `${strategy.id} on ${row.collateralSymbol ?? params.collateralToken}/${row.loanSymbol ?? params.loanToken}: ${formatAmount(units, loanDecimals)} face`,
+      `  cost ${formatAmount(build.derived.cost, loanDecimals)}  fee ${formatAmount(build.derived.fee, loanDecimals)}  principal ${formatAmount(build.derived.principal, loanDecimals)}`,
+      `  the strike wants ${formatAmount(build.derived.collateral, collateralDecimals)} collateral; at most ${formatAmount(build.derived.maxTopUp, collateralDecimals)} comes from you`,
+      floor ? `  swap floor ${formatAmount(floor.minOut, collateralDecimals)} (${floor.source}, ${floor.slippageBps} bps off ${formatAmount(floor.estimate, collateralDecimals)})` : "  no swap leg",
+      `  ${build.legs.length} leg(s), deadline ${deadline}`,
+    ],
+  };
 }
 
 async function resolveMarket(ctx: Ctx, needDecimals = true): Promise<{ params: MarketParams; loanDecimals: number; collateralDecimals: number }> {
@@ -1308,6 +1458,31 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   "strategy quote": async (ctx) => {
     const g = await gatherStrategy(ctx);
     output(ctx.json, gatheredToJson(g), renderStrategyQuote(ctx, g));
+  },
+
+  "strategy program": async (ctx) => {
+    const built = await buildStrategyProgram(ctx, false);
+    output(ctx.json, built.json, built.human.join("\n"));
+  },
+
+  "strategy execute": async (ctx) => {
+    const built = await buildStrategyProgram(ctx, true);
+    const c = built.client;
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const sent: Record<string, string> = {};
+    if (programNeedsGrant(built.legs)) {
+      const grant = await c.grantIfNeeded(built.grantExpiry, nowSec);
+      if (grant) sent.grant = grant.hash;
+    }
+    for (const [token, amount] of built.approvals) {
+      if (amount > 0n) sent[`approve:${token}`] = (await c.approveForProgram(token, amount)).hash;
+    }
+    const tx = await c.execute(built.legs, built.deadline);
+    output(
+      ctx.json,
+      { ...built.json, sent: { ...sent, execute: tx.hash } },
+      [...built.human, "", `executed: ${tx.hash}`].join("\n"),
+    );
   },
 
   "strategy positions": async (ctx) => {
