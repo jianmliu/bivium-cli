@@ -88,6 +88,7 @@ export function loadProfile(path: string): DeploymentProfile {
     chainId: raw.chainId,
     core: requireAddress(raw.core, "core"),
     signatureRatifier: requireAddress(raw.signatureRatifier, "signatureRatifier"),
+    ...(raw.setterRatifier === undefined ? {} : { setterRatifier: requireAddress(raw.setterRatifier, "setterRatifier") }),
     rpcUrl: raw.rpcUrl,
     relayerUrl: raw.relayerUrl as string | undefined,
     tokens,

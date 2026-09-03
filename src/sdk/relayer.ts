@@ -23,6 +23,8 @@ export interface RelayerDomain {
   core: Address;
   abiProfile: "core-v1" | "core-v2";
   signatureRatifier: Address;
+  /** The ratifier this book is keyed by. Omit to key by `signatureRatifier` (the pre-setter default). */
+  ratifier?: Address;
   relayerUrl: string;
 }
 
@@ -138,7 +140,7 @@ function reviveRow(raw: unknown, domain: RelayerDomain, params: MarketParams): B
     strike !== params.strike ||
     s.allowPartialRepay !== params.allowPartialRepay ||
     !sameAddress(gate, params.gate) ||
-    !sameAddress(ratifier, domain.signatureRatifier)
+    !sameAddress(ratifier, domain.ratifier ?? domain.signatureRatifier)
   ) {
     return null;
   }
@@ -203,7 +205,7 @@ export async function fetchRelayerBook(
     strike: params.strike.toString(),
     allowPartialRepay: String(params.allowPartialRepay),
     gate: params.gate,
-    ratifier: domain.signatureRatifier,
+    ratifier: domain.ratifier ?? domain.signatureRatifier,
   });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);

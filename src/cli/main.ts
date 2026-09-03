@@ -31,6 +31,10 @@ import {
   priceFromSimpleAprBps,
   priceToTick,
   ratifyDigest,
+  buildOfferTree,
+  encodeProofRatifierData,
+  resolveRatifier,
+  type RatifierKind,
   resolveToken,
   strikeFromFloor,
   tickToPrice,
@@ -88,6 +92,7 @@ usage: bivium <command> [options]
   market id|state       compute the market id / read MarketState
   portfolio [--account <addr>] [--dir <orders>]   # aggregated positions/DCN/escrow/orders across all markets
   read position|credit|liquidity --account <addr>
+  maker ratify-root (--offer <f>[,<f>...] | --commitment <hash>[,<hash>...]) [--maker <addr>] [--off]  # approve a whole book with ONE on-chain flag
   maker set-ratifier [--off]
   maker fund --assets <human>
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
@@ -222,6 +227,9 @@ const OPTIONS = {
   router: { type: "string" },
   "min-out": { type: "string" },
   "chunk-blocks": { type: "string" },
+  ratifier: { type: "string" },
+  "no-flag": { type: "boolean" },
+  commitment: { type: "string" },
   "slippage-bps": { type: "string" },
   "max-settle-in": { type: "string" },
   unwind: { type: "boolean" },
@@ -249,6 +257,17 @@ function loadKeyAccount(keyEnv: string, keyFile?: string) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(raw)) fail(`${keyEnv} is not a 32-byte hex private key`);
   return privateKeyToAccount(raw as Hex);
 }
+/** The ratifier this invocation uses: the profile's default, or `--ratifier setter|signature`. */
+function resolveRatifierOr(ctx: Ctx): { kind: RatifierKind; address: Address } {
+  const o = ctx.values.ratifier;
+  if (o !== undefined && o !== "setter" && o !== "signature") fail("--ratifier must be setter or signature");
+  try {
+    return resolveRatifier(ctx.profile, o as RatifierKind | undefined);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
 function accountFor(ctx: Ctx) {
   return loadKeyAccount(ctx.keyEnv, ctx.values["key-file"] as string | undefined);
 }
@@ -669,6 +688,7 @@ const { params, loanDecimals, collateralDecimals } = market;
   }
   const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
   const account = accountFor(ctx);
+  const rat = resolveRatifierOr(ctx);
   const offer: Offer = {
     ...params,
     maker: account.address as Address,
@@ -679,19 +699,38 @@ const { params, loanDecimals, collateralDecimals } = market;
     start: now - 300n,
     expiry: now + ttl,
     group: `0x${randomBytes(32).toString("hex")}` as Hex,
-    ratifier: ctx.profile.signatureRatifier,
+    ratifier: rat.address,
   };
   const commitment = adapterFor(ctx.profile.abiProfile).offerCommitment(
     { chainId: ctx.profile.chainId, core: ctx.profile.core },
     offer,
   );
-  const digest = ratifyDigest(ctx.profile.chainId, ctx.profile.signatureRatifier, commitment);
-  const signature = await account.sign({ hash: digest });
-  // Precheck: refuse to emit a file the on-chain ratifier would not accept.
   const c = new BiviumClient(ctx.profile, account);
   await c.verifyProfile();
+  // `signature` carries the offer's ratifierData, whichever ratifier attests it.
+  let signature: Hex;
+  let flagged: string | null = null;
+  if (rat.kind === "signature") {
+    signature = await account.sign({ hash: ratifyDigest(ctx.profile.chainId, rat.address, commitment) });
+  } else {
+    // A single offer degenerates to `root == commitment` with an empty proof. Approving it on-chain is
+    // what makes it fillable, so do that BEFORE the precheck below — otherwise the precheck is the one
+    // reporting a failure the maker has simply not performed yet.
+    signature = encodeProofRatifierData([]);
+    if (ctx.values["no-flag"] === true) {
+      flagged = "skipped (--no-flag): the offer cannot fill until `maker ratify-root` approves this commitment";
+    } else if (await c.isRootRatified(rat.address, account.address as Address, commitment)) {
+      flagged = "already approved";
+    } else {
+      flagged = (await c.setRootRatified(rat.address, account.address as Address, commitment, true)).hash;
+    }
+  }
+  // Precheck: refuse to emit a file the on-chain ratifier would not accept. The one exception is a
+  // deliberately unflagged setter offer: the maker is minting it to tree with others, so it is MEANT
+  // to be unratified until `maker ratify-root` approves the whole book and writes the real proofs in.
+  const deferred = rat.kind === "setter" && ctx.values["no-flag"] === true;
   const status = await c.offerStatus(offer, signature);
-  if (!status.ratified) fail("on-chain ratifier precheck did not return RATIFIED — aborting");
+  if (!status.ratified && !deferred) fail("on-chain ratifier precheck did not return RATIFIED — aborting");
   const file = buildSignedOfferFile(ctx.profile, offer, commitment, signature);
   const path = typeof ctx.values.out === "string" ? ctx.values.out : `offer-${commitment.slice(2, 10)}.json`;
   writeFileSync(path, JSON.stringify(file, null, 2) + "\n");
@@ -704,11 +743,13 @@ const { params, loanDecimals, collateralDecimals } = market;
   }
   output(
     ctx.json,
-    { path, commitment, tick, price: tickToPrice(tick), ratifierRegistered: status.ratifierRegistered, published },
+    { path, commitment, tick, price: tickToPrice(tick), ratifier: rat.address, ratifierKind: rat.kind, rootFlagged: flagged, ratifierRegistered: status.ratifierRegistered, published },
     [
       `offer written to ${path}`,
       `  commitment: ${commitment}`,
       `  tick ${tick} → price ${formatAmount(tickToPrice(tick), 18)}`,
+      `  ratifier: ${rat.kind} (${rat.address})${flagged === null ? "" : `  root ${flagged}`}`,
+      ...(deferred ? ["  NOT FILLABLE YET: approve it with `maker ratify-root --offer <this file>[,…]`, which also writes the tree proof back in"] : []),
       status.ratifierRegistered ? `  ratifier registered ✓` : `  WARNING: maker has not run \`maker set-ratifier\` yet`,
       ...(published ? [`  published to relayer ${ctx.profile.relayerUrl}`] : []),
     ].join("\n"),
@@ -1169,9 +1210,59 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   "maker set-ratifier": async (ctx) => {
+    const rat = resolveRatifierOr(ctx);
     const c = client(ctx, true);
-    const tx = await c.setRatifier(ctx.profile.signatureRatifier, ctx.values.off !== true);
-    output(ctx.json, { ...tx }, `setRatifier(${ctx.profile.signatureRatifier}, ${ctx.values.off !== true}): ${tx.hash}`);
+    const tx = await c.setRatifier(rat.address, ctx.values.off !== true);
+    output(ctx.json, { ...tx, ratifier: rat.address, ratifierKind: rat.kind }, `setRatifier(${rat.kind} ${rat.address}, ${ctx.values.off !== true}): ${tx.hash}`);
+  },
+
+  // On-chain approval of a whole book: one flag authorizes every offer in the tree, clearing it retires
+  // them all. `--commitment` may repeat; with one commitment the root IS that commitment.
+  "maker ratify-root": async (ctx) => {
+    const setter = ctx.profile.setterRatifier ?? fail("profile has no setterRatifier — deploy one first (bivium-core script/DeploySetterRatifier.s.sol)");
+    // Two ways in: raw commitments, or the offer FILES themselves. With files the proofs are written
+    // back into each file, which is what makes a multi-offer tree usable at all — an offer minted on
+    // its own carries the empty proof of a single-offer root, and that proof is wrong the moment the
+    // offer joins a bigger tree.
+    const files = (typeof ctx.values.offer === "string" ? ctx.values.offer.split(",") : []).map((x) => x.trim()).filter(Boolean);
+    const raw = ctx.values.commitment;
+    let list = (typeof raw === "string" ? raw.split(",") : []).map((x) => x.trim()).filter(Boolean);
+    if (files.length && list.length) fail("pass --offer or --commitment, not both");
+    const loaded = files.map((f) => {
+      const parsed = parseSignedOfferFile(readFileSync(f, "utf8"), ctx.profile);
+      if (getAddress(parsed.offer.ratifier) !== getAddress(setter)) {
+        fail(`${f} names ratifier ${parsed.offer.ratifier}, not the setter ${setter} — remake it with --ratifier setter`);
+      }
+      return { path: f, commitment: parsed.commitment };
+    });
+    if (loaded.length) list = loaded.map((l) => l.commitment);
+    if (!list.length) fail("--offer <file>[,<file>...] or --commitment <hash>[,<hash>...] is required");
+    for (const h of list) if (!/^0x[0-9a-fA-F]{64}$/.test(h)) fail(`not a commitment: ${h}`);
+    const tree = buildOfferTree(list as Hex[]);
+    const c = client(ctx, true);
+    const maker = getAddress((ctx.values.maker as string | undefined) ?? c.account) as Address;
+    const on = ctx.values.off !== true;
+    const already = await c.isRootRatified(setter, maker, tree.root);
+    const tx = already === on ? null : await c.setRootRatified(setter, maker, tree.root, on);
+    const proofs = tree.leaves.map((leaf, i) => ({ commitment: leaf, proof: tree.proofs[i]!, ratifierData: encodeProofRatifierData(tree.proofs[i]!) }));
+    // Write each proof back so the file is fillable as a member of THIS tree.
+    const rewritten: string[] = [];
+    if (on) {
+      for (const l of loaded) {
+        const i = tree.leaves.indexOf(l.commitment.toLowerCase() as Hex);
+        const file = JSON.parse(readFileSync(l.path, "utf8")) as Record<string, unknown>;
+        file.signature = proofs[i]!.ratifierData;
+        writeFileSync(l.path, JSON.stringify(file, null, 2) + "\n");
+        rewritten.push(l.path);
+      }
+    }
+    output(ctx.json, { root: tree.root, maker, ratified: on, tx: tx?.hash ?? null, proofs, rewritten }, [
+      `root ${tree.root}  (${tree.leaves.length} offer${tree.leaves.length === 1 ? "" : "s"})`,
+      `maker ${maker}  ratified ${on}  ${tx ? tx.hash : "already in that state, no transaction sent"}`,
+      ...proofs.map((p) => `  ${p.commitment}  ratifierData ${p.ratifierData.length > 74 ? p.ratifierData.slice(0, 70) + "…" : p.ratifierData}`),
+      ...rewritten.map((f) => `  proof written back to ${f}`),
+      on ? "each offer above fills by passing its ratifierData; clearing this one root retires them all" : "cleared: every offer in this tree is retired",
+    ].join("\n"));
   },
 
   "maker fund": async (ctx) => {
