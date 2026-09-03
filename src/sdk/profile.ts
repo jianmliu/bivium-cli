@@ -67,6 +67,9 @@ export function loadProfile(path: string): DeploymentProfile {
   if (raw.morphoJitFunder !== undefined && (typeof raw.morphoJitFunder !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.morphoJitFunder))) {
     throw new Error("profile morphoJitFunder must be an address");
   }
+  if (raw.shortRouter !== undefined && (typeof raw.shortRouter !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.shortRouter))) {
+    throw new Error("profile shortRouter must be an address");
+  }
   if (raw.strategyRouter !== undefined && (typeof raw.strategyRouter !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.strategyRouter))) {
     throw new Error("profile strategyRouter must be an address");
   }
@@ -94,6 +97,7 @@ export function loadProfile(path: string): DeploymentProfile {
     maturitySettler: raw.maturitySettler as Address | undefined,
     v4JitKeeper: raw.v4JitKeeper as Address | undefined,
     morphoJitFunder: raw.morphoJitFunder as Address | undefined,
+    shortRouter: raw.shortRouter as Address | undefined,
     strategyRouter: raw.strategyRouter as Address | undefined,
     v4Quoter: raw.v4Quoter as Address | undefined,
     v4StateView: raw.v4StateView as Address | undefined,

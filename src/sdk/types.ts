@@ -62,8 +62,12 @@ export interface DeploymentProfile {
   v4JitKeeper?: Address;
   /** MorphoJitFunder: the same zero-capital settle, funded by a Morpho Blue flash loan and converted on v4. */
   morphoJitFunder?: Address;
-  /** StrategyRouter: one `execute(Leg[])` for a whole strategy; absent = not deployed on this chain. */
+  /** StrategyRouter: one `execute(Leg[])` for a whole strategy; absent = not deployed on this chain. A market
+   *  naming an OriginationGate admits a borrower's own origination ONLY through a listed fee-bearing router, so
+   *  on a gated series this is not an optimisation — without it the borrow cannot be placed at all. */
   strategyRouter?: Address;
+  /** ShortRouter: the single-purpose borrow-and-sell lane, listed alongside the StrategyRouter on the fee gate. */
+  shortRouter?: Address;
   /** Uniswap v4 Quoter — a depth-aware floor for a swap leg. Absent: fall back to the pool's current price. */
   v4Quoter?: Address;
   /** Uniswap v4 StateView — the pool's current price, the marginal (and optimistic) floor. */
