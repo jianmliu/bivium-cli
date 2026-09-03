@@ -304,6 +304,34 @@ npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000
 - Combos (`straddle`, `shortVol`, `collar`, `spread`) are listed but not quotable as one unit until
   the Router lands — quote each leg separately.
 
+### Which ratifier attests your offers
+
+Two ratifiers, same trust model (a `view` attestation with zero fund power), different way of saying
+"this quote is mine":
+
+- **On-chain approval (`SetterRatifier`)** — you flag a Merkle root in a transaction. One flag
+  authorizes a whole book of quotes; clearing that root retires them all in one more transaction.
+  This is the **default on any deployment whose profile carries `setterRatifier`**, matching Morpho
+  Midnight: approving a named transaction cannot be phished the way an opaque typed-data blob can,
+  and it is the ONLY path open to a contract maker, since neither ratifier falls back to EIP-1271.
+- **Signature (`SignatureRatifier`)** — you sign each offer offline. Free and instant, so it is what
+  an active market maker wants for requoting; needs an EOA signer. Select it with `--ratifier signature`.
+
+Profiles without a `setterRatifier` keep signing, so nothing changes until an address is recorded.
+`--ratifier setter|signature` overrides per invocation.
+
+Minting one offer on-chain-approved needs nothing extra: the root IS its commitment and the flag is
+sent for you. For a **book**, mint with `--no-flag` (the offers are deliberately not fillable yet,
+and say so), then approve them together:
+
+```bash
+bivium maker ratify-root --offer a.json,b.json,c.json --key-file "$KEY_FILE"
+```
+
+That builds the tree, sends ONE `setRootRatified`, and writes each file's real proof back in as its
+ratifierData. Never publish an offer minted with `--no-flag` before this step: its proof is the
+empty one of a single-offer root and it will not fill. `--off` on the same files retires the book.
+
 ### The MCP twin (`bivium-mcp`)
 
 The same engine is exposed as MCP tools over stdio for agents that prefer tool calls to shelling

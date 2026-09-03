@@ -50,6 +50,9 @@ export interface DeploymentProfile {
   chainId: number;
   core: Address;
   signatureRatifier: Address;
+  /** SetterRatifier (on-chain root approval). Present = it becomes this deployment's DEFAULT, the
+   *  way Midnight defaults to approval over signing; absent = the signature ratifier stays default. */
+  setterRatifier?: Address;
   rpcUrl: string;
   /** Optional signed-offer relayer origin (http(s)); enables `--source relayer` and `--publish`. */
   relayerUrl?: string;
@@ -97,6 +100,9 @@ export interface SignedOfferFile {
   core: Address;
   offer: Record<keyof Offer, string | boolean>;
   commitment: Hex;
+  /** The `ratifierData` the core hands to `offer.ratifier`: a 65-byte ECDSA signature for the
+   *  signature ratifier, or `abi.encode(bytes32[] proof)` for the setter. The field keeps its name
+   *  so v1 files stay readable; `offer.ratifier` says which shape it is. */
   signature: Hex;
 }
 

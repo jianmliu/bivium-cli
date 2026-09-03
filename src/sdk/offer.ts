@@ -105,8 +105,11 @@ export function parseSignedOfferFile(
   if (typeof raw.commitment !== "string" || commitment !== raw.commitment.toLowerCase()) {
     throw new Error("offer commitment mismatch — file does not match its own offer fields");
   }
-  if (typeof raw.signature !== "string" || !/^0x[0-9a-fA-F]{130}$/.test(raw.signature)) {
-    throw new Error("offer signature must be a 65-byte hex string");
+  // `signature` carries the offer's ratifierData: a 65-byte ECDSA signature for the signature
+  // ratifier, or abi.encode(bytes32[] proof) for the setter (proof length varies, empty is legal for
+  // a single-offer root). Accept any even-length hex blob and let the ratifier reject a wrong shape.
+  if (typeof raw.signature !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(raw.signature)) {
+    throw new Error("offer ratifierData must be a hex string (65-byte signature, or abi-encoded proof)");
   }
   return { offer, commitment, signature: raw.signature as Hex };
 }

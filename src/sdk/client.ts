@@ -13,7 +13,7 @@ import { gasFaucetAbi } from "./wallet.ts";
 import { adapterFor, type ChainDomain, type LineageAdapter } from "./lineage.ts";
 import { collateralForDebt, principalForUnits } from "./math.ts";
 import { marketParamsFromOffer } from "./offer.ts";
-import { RATIFIED } from "./ratify.ts";
+import { RATIFIED, setterRatifierAbi } from "./ratify.ts";
 import { simpleAprBpsFromPrice, tickToPrice } from "./tick.ts";
 import {
   ZERO_ADDRESS,
@@ -266,6 +266,19 @@ export class BiviumClient {
 
   async setRatifier(ratifier: Address, on: boolean): Promise<TxResult> {
     return await this.writeCore("setRatifier", [ratifier, on]);
+  }
+
+  /**
+   * Flag (or clear) a Merkle root on the SetterRatifier. This is the on-chain-approval counterpart to
+   * signing an offer: every offer whose commitment is a leaf of `root` becomes fillable, and clearing
+   * the root retires the whole book in one transaction.
+   */
+  async setRootRatified(setter: Address, maker: Address, root: Hex, ratified: boolean): Promise<TxResult> {
+    return await this.write({ address: setter, abi: setterRatifierAbi, functionName: "setRootRatified", args: [maker, root, ratified] });
+  }
+
+  async isRootRatified(setter: Address, maker: Address, root: Hex): Promise<boolean> {
+    return (await this.pub.readContract({ address: setter, abi: setterRatifierAbi, functionName: "isRootRatified", args: [maker, root] } as never)) as boolean;
   }
 
   async fund(params: MarketParams, assets: bigint): Promise<TxResult> {
