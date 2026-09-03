@@ -67,6 +67,15 @@ export function loadProfile(path: string): DeploymentProfile {
   if (raw.morphoJitFunder !== undefined && (typeof raw.morphoJitFunder !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.morphoJitFunder))) {
     throw new Error("profile morphoJitFunder must be an address");
   }
+  if (raw.strategyRouter !== undefined && (typeof raw.strategyRouter !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.strategyRouter))) {
+    throw new Error("profile strategyRouter must be an address");
+  }
+  if (raw.v4Quoter !== undefined && (typeof raw.v4Quoter !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.v4Quoter))) {
+    throw new Error("profile v4Quoter must be an address");
+  }
+  if (raw.v4StateView !== undefined && (typeof raw.v4StateView !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(raw.v4StateView))) {
+    throw new Error("profile v4StateView must be an address");
+  }
   if (raw.coreDeploymentBlock !== undefined && (typeof raw.coreDeploymentBlock !== "number" || !Number.isInteger(raw.coreDeploymentBlock) || raw.coreDeploymentBlock < 0)) {
     throw new Error("profile coreDeploymentBlock must be a non-negative integer");
   }
@@ -85,6 +94,9 @@ export function loadProfile(path: string): DeploymentProfile {
     maturitySettler: raw.maturitySettler as Address | undefined,
     v4JitKeeper: raw.v4JitKeeper as Address | undefined,
     morphoJitFunder: raw.morphoJitFunder as Address | undefined,
+    strategyRouter: raw.strategyRouter as Address | undefined,
+    v4Quoter: raw.v4Quoter as Address | undefined,
+    v4StateView: raw.v4StateView as Address | undefined,
     coreDeploymentBlock: raw.coreDeploymentBlock as number | undefined,
   };
 }
