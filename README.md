@@ -53,7 +53,25 @@ npm run cli --silent -- strategy quote --strategy lendQuote --asset mNVDA --coun
 # Build a bounded intent/router/sequential plan; nothing is submitted
 npm run cli --silent -- strategy plan --strategy lendQuote --asset mNVDA --counter bUSD \
   --size 1000 --maturity 1789113600 --buffer 20 --apr-bps 1500 --json
+
+# The StrategyRouter leg program for a signed bid: printed, then sent as one atomic call
+npm run cli --silent -- strategy program --strategy protectivePut --offer bid.json --units 125 --json
+npm run cli --silent -- strategy execute --strategy protectivePut --offer bid.json --units 125
+
+# ... and its unwind, out of pocket or out of the position's own collateral
+npm run cli --silent -- strategy execute --unwind --loan bUSD --collateral mNVDA \
+  --maturity 1789113600 --floor 125 --assets 125 --via wallet
 ```
+
+`program` and `execute` are the router mode of a plan made concrete: an ordered `Leg[]` for one
+`execute(Leg[], deadline)` call, with every bound filled in. A fill's price is the signed offer's tick, so its
+cost, the router's fee off the premium and the collateral the strike demands are exact and the builder computes
+them; only the swap is uncertain, so it carries a floor, and that floor is also what bounds the collateral top-up
+(`maxTopUp = collateral - minOut`). The floor comes from `--min-out`, else the profile's `v4Quoter` (depth-aware),
+else its `v4StateView` (the pool's current price — marginal, and so optimistic, which is the safe direction: too
+high a floor reverts, too low a floor fills badly). With none of the three it refuses rather than guessing.
+`execute` grants the router `CAP_FILL | CAP_WITHDRAW_COLLATERAL` once, approves exactly what the program may draw,
+and sends it; an ask-only program needs no grant at all, because the router is the taker there.
 
 `catalog` exposes the initial `lendAsset`, `lendQuote`, and `short` products and their aliases.
 `assess` reports facts, warnings, unknowns, `MEME_DELIVERY_RISK` where applicable, stress outcomes,
