@@ -21,6 +21,12 @@ const ALLOWED = new Set([
   "src/sdk/strategies/catalog.ts",
   "src/sdk/strategies/resolve.ts",
   "src/sdk/strategies/quote.ts",
+  // The leg program and its pool reads: encoding and arithmetic only, with every chain call handed in.
+  "src/sdk/strategies/program.ts",
+  "src/sdk/strategies/pools.ts",
+  // `tick.ts` comes with them: a fill's cost is its price on the grid, which is the one number a program does not
+  // get to choose.
+  "src/sdk/tick.ts",
   "src/sdk/types.ts",
   "src/sdk/math.ts",
   "src/sdk/market.ts",
