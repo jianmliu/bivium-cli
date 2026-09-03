@@ -199,3 +199,20 @@ test("profile: the shipped Sepolia profile carries the TBVBTC family", () => {
   assert.equal(p.tokens?.TBVBTC?.address, VAULT_APP.tbvbtc);
   assert.equal(p.tokens?.vaultBTC?.decimals, 8);
 });
+
+test("profile: the fee-bearing routers load and are rejected when they are not addresses", () => {
+  // On a gated series these are not an optimisation. A market naming an OriginationGate admits a borrower's own
+  // origination ONLY through a listed fee-bearing router, so a profile without one cannot place the borrow at all.
+  const routers = { strategyRouter: "0x2f6036fFA0F1c3fc592d2948e9fB7f67eaaf96bB", shortRouter: "0xF7F8f64F8832D104743C30b727158e408Fd02BA8" };
+  const p = loadProfile(writeProfile({ ...PROFILE_BASE, ...routers }));
+  assert.equal(p.strategyRouter, routers.strategyRouter);
+  assert.equal(p.shortRouter, routers.shortRouter);
+  assert.equal(loadProfile(writeProfile(PROFILE_BASE)).shortRouter, undefined);
+  assert.throws(() => loadProfile(writeProfile({ ...PROFILE_BASE, shortRouter: "0xnope" })), /shortRouter must be an address/);
+});
+
+test("the shipped Robinhood profile names the routers the w0918 fee gate admits", () => {
+  const p = loadProfile("profiles/robinhood-testnet.json");
+  assert.equal(p.strategyRouter, "0x2f6036fFA0F1c3fc592d2948e9fB7f67eaaf96bB");
+  assert.equal(p.shortRouter, "0xF7F8f64F8832D104743C30b727158e408Fd02BA8");
+});

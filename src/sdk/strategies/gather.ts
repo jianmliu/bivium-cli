@@ -278,7 +278,8 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
 }
 
 export interface PlanRequest {
-  /** Deployed StrategyRouter, if any. */
+  /** Deployed StrategyRouter. Defaults to the profile's, which is what a gated market requires: a market naming an
+   *  OriginationGate admits a borrower's own origination ONLY through a listed fee-bearing router. */
   router?: Address;
   /** Human amount; required when the strategy has a swap leg. */
   minOut?: string;
@@ -297,5 +298,6 @@ export function planFromGathered(profile: DeploymentProfile, g: GatheredStrategy
       ? { sellToken: g.res.numeraire, buyToken: g.res.asset, minOut: minOut! }
       : { sellToken: g.res.asset, buyToken: g.res.numeraire, minOut: minOut! }
     : undefined;
-  return buildPlan(g.res, g.quote, { now: g.now, core: profile.core, router: req.router, swap, ttlSeconds: req.ttlSeconds });
+  const router = req.router ?? profile.strategyRouter;
+  return buildPlan(g.res, g.quote, { now: g.now, core: profile.core, router, swap, ttlSeconds: req.ttlSeconds });
 }
