@@ -39,7 +39,7 @@ Worktree: `/Volumes/T7-Data/bendle/bivium-cli/.worktrees/agent-mm-keeper` (base 
 ## Task 3: PR delivery
 
 - [x] Update design status and record observed checks/limits, without promising an untested live deployment.
-- [ ] Commit/push isolated branches and create separate Draft PRs targeting each repo's main branch with dependency notes. Do not merge, deploy, enable cron or move keys/funds.
+- [x] Commit/push isolated branches and create separate Draft PRs targeting each repo's main branch with dependency notes. Do not merge, deploy, enable cron or move keys/funds.
 
 ## Stop conditions
 
@@ -58,5 +58,11 @@ Final freshness checks retain each source observation and revalidate immediately
 The full suite has 72 passing tests, including 28 session tests and loopback production-signing
 fixtures. CLI has 174 passing tests; typechecks, both Skill validators, mirror tests, and package
 inclusion checks pass. No public-chain compatibility, profitability, live run, or deployment is
-implied by these local checks. Final quality review passed with no important open findings;
-Draft PR delivery remains tracked above.
+implied by these local checks. Final quality review passed with no important open findings.
+
+Delivered as Draft PRs targeting main:
+
+- Runtime: https://github.com/jianmliu/bivium-mm/pull/45 (implementation commit 9a6fbe4; base 5b898d1).
+- Skill: https://github.com/jianmliu/bivium-cli/pull/35 (implementation commit 5878c23; base 6ee3978).
+
+Neither PR was merged. No deployment, host service, key provisioning, funding, or live session was started.
