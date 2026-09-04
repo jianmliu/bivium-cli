@@ -400,3 +400,8 @@ npm run typecheck
 ```
 
 The distributable Skill is [skills/bivium/SKILL.md](skills/bivium/SKILL.md).
+Its [conversation guide](skills/bivium/references/conversation.md) starts from everyday goals
+such as earning on held Meme, dual-currency target buying, going long or going short. The agent
+discovers terms and asks only for missing material choices, then presents outcomes and a short
+confirmation with transaction details. Ordinary spot limit orders are not silently converted
+into dual-currency products; simpler wording does not remove risk checks or per-transaction signing.

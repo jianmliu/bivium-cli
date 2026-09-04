@@ -19,9 +19,10 @@ Claude Code, all projects on a machine:
 cp -r skills/bivium ~/.claude/skills/
 ```
 
-Any other SKILL.md-compatible agent: point it at `skills/bivium/SKILL.md`.
+Any other SKILL.md-compatible agent: keep the whole `skills/bivium/` directory, including
+`references/`, and point it at `skills/bivium/SKILL.md`.
 
 The skill drives the CLI in this repo (`git clone` + `npm install`, Node >= 20) against Bivium
-testnet deployments — Robinhood Chain testnet (46630), Sepolia, or a local anvil chain. Everything
-is testnet-only with valueless mock assets; the skill's own rules require keys via env vars only
-and refuse mainnet work.
+Robinhood Chain testnet (46630). Sepolia and local anvil deployments are historical development
+references, not executable public Skill targets. Follow the Skill's signer-storage rules and
+per-transaction approval requirements; mainnet is identity/reference-only, not executable.

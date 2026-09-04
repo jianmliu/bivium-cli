@@ -12,12 +12,21 @@ Bivium offers dual-currency yield and Meme long/short trading through fixed-term
 with repay-or-deliver settlement. This Skill turns the user's goal into a risk assessment and
 bounded action. The user owns the capital, risk policy, and final signature.
 
+## Start with the user's goal
+
+For conversational yield or Meme trading requests, first read
+[the conversation guide](references/conversation.md). Reuse known context, discover available
+markets, and ask only for missing material choices in everyday language. An ordinary target buy
+or sell is **not consent to dual-currency yield**: clarify that product distinction before routing.
+Lead with a short decision summary; retain the full verification payload and all material risks
+before any signature. The execution and risk-policy gates below remain mandatory.
+
 ## Four primary operations
 
 | User goal | Strategy ID | Asset flow |
 |---|---|---|
-| Deposit Meme for yield / sell at a target | `lendAsset` | Supply the Meme that short traders borrow; settlement can return Meme, quote collateral, or a pooled mix. |
-| Deposit quote assets for yield / buy at a target | `lendQuote` | Supply quote assets that long traders borrow; settlement can return quote assets, Meme collateral, or a pooled mix. |
+| Deposit Meme for yield, accepting possible quote settlement | `lendAsset` | Supply the Meme that short traders borrow; settlement can return Meme, quote collateral, or a pooled mix. |
+| Deposit quote assets for yield, accepting possible Meme settlement | `lendQuote` | Supply quote assets that long traders borrow; settlement can return quote assets, Meme collateral, or a pooled mix. |
 | Long Meme | `leveredLong` | Borrow quote assets against Meme and swap the proceeds into more Meme. |
 | Short Meme | `short` | Borrow Meme against quote collateral and swap the proceeds into quote assets. |
 
@@ -64,6 +73,9 @@ asset or strategy as safe.
 
 Follow this order for every proposed action:
 
+0. **Clarify intent.** Reuse the conversation context and resolve any ordinary-trade versus
+   dual-currency-yield ambiguity before choosing a strategy. Do not turn a target price into
+   product consent. The conversation guide governs missing choices and the user's needed-by date.
 1. **Discover an existing market.** Set `BIVIUM_PROFILE=profiles/robinhood-testnet.json`, verify
    chain `46630` and the pinned Core, then run `market list --json`. Prefer an existing full market
    identity; a different token, strike, maturity, partial-repay flag, gate, chain, or Core is a
@@ -85,7 +97,8 @@ Follow this order for every proposed action:
    `{ source: "user-policy", rules: ... }` for the same market and evidence before `buildPlan`.
    There is currently no CLI bypass or accept flag.
 7. **Preview.** Re-read market, book, balances, capacity, expiry, and quote. After composing any
-   optional input or execution leg, re-preview after composition. Show chain, Core,
+   optional input or execution leg, re-preview after composition. Lead with the conversation
+   guide's short confirmation, followed by the detailed verification payload. Show chain, Core,
    market, strategy, account, amount, maximum loss, slippage/price bound, expiry, destination, and
    each transaction. Use `borrow quote` or `--dry-run` where supported.
 8. **Sign and execute.** The current release requires the user to approve and sign **each
@@ -267,7 +280,8 @@ Amounts are exact decimal strings in human units ("600", "0.01") — the CLI con
 token's exact decimals and rejects over-precision rather than rounding. Add `--json` whenever you
 need to parse output. In zsh, expand flag-bundles with `${=VAR}` (unquoted vars do not word-split).
 
-When a HUMAN is driving interactively, offer `bivium wizard` instead of raw flags — one entry
+For a human who opts into direct interactive CLI use, offer `bivium wizard` instead of raw flags;
+do not make conversational users complete its technical questionnaire. It is one entry
 point covering all three intents (出借挂单 with funding assistance: auto-detects short escrow and
 offers mint/fund/set-ratifier; 抵押借款: pick a live bid, quote shown before execution, collateral
 minted with consent, repay deadline and command printed after; 交易 DCN: book display, plan shown
@@ -318,10 +332,12 @@ is the interest), and reclaiming collateral is a separate transaction after repa
 ## Workflow: strategies (策略工具箱)
 
 A strategy is a NAMED composition of the actions above (fill a bid / eat an ask / fund + at most
-one swap) — never a new primitive. The engine picks the market for the user from a VIEW (asset,
-tenor, strike buffer), and every quote is maturity-only: the payoff has one variable, S_T, and the
-worst case is stated with its FORM (forfeit collateral / deliver collateral / called away /
-assigned). There is no liquidation to model, so the words "liquidation price" never appear.
+one swap) — never a new primitive. The engine resolves a market from a VIEW (asset, tenor, strike
+buffer); agents derive technical inputs from verified data and confirmed user choices, not a
+required jargon questionnaire. Indicative payoff quotes are maturity-only: the payoff has one
+variable, S_T, and the worst case is stated with its FORM (forfeit collateral / deliver collateral /
+called away / assigned). These estimates do not verify an all-in loss cap, early-exit liquidity,
+or spendable cash by a deadline. No-liquidation is not a stop loss or protection from token loss.
 
 ```bash
 npm run cli --silent -- strategy list                       # catalog: id, name, group, side/line, mirror
@@ -335,10 +351,13 @@ npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000
     --source relayer --min-out 1000
 ```
 
-- `strategy quote` prints the five confirm-screen numbers — **prepay, premium, WORST CASE (+ form),
-  break-even, P(exercise)** — and a payoff table. Surface all five to the user before anything is
-  spent; the prepay of a borrow-and-sell strategy IS its worst case. Figures are estimates off the
-  pair feed's spot (`spotStatus: stale` is flagged); execution is bounded by `minOut`.
+- `strategy quote` prints **prepay, premium, WORST CASE (+ form), break-even, P(exercise)** and a
+  payoff table. Retain this full output as detail, not a mandatory five-number front page. Lead
+  with the conversation guide's material decision summary. Borrow-and-sell prepay is a modeled
+  worst case, not a verified all-in loss limit: account for fees, swaps, gas and execution bounds.
+  Figures are estimates off the pair feed's spot (`spotStatus: stale` is flagged); execution is
+  bounded by `minOut`. P(exercise) is a model estimate, not a guaranteed probability or a substitute
+  for delivery-risk assessment; annualized return is also not guaranteed.
 - `--buffer` is the strike distance from spot in the OTM direction (positive = OTM). When no rung is
   within tolerance the quote uses the nearest and lists the alternatives — offer them, don't invent
   a market (see Discovery above).
@@ -392,8 +411,9 @@ user's key. Register it in the client's MCP config:
                                           "env": { "BIVIUM_PROFILE": "<bivium-cli>/profiles/robinhood-testnet.json" } } } }
 ```
 
-Tools: `strategy_list` (the catalog — read it first), `market_list` (pick a maturity; join existing
-markets), `strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),
+Tools: `market_list` (discover available terms first; join existing markets), `strategy_list`
+(then read the catalog and resolve the confirmed goal),
+`strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),
 `strategy_plan` (mode + steps + hard limits; never executes), `strategy_positions` (an account's holdings
 read as strategies, proxied from the app's `/api/strategies/positions`; the CLI twin is
 `strategy positions --taker <addr>`). Every quote carries `parity`: the SDK recomputes locally only to build
@@ -403,13 +423,16 @@ compared (`skipped` for off-book pricing or multi-level sweeps, `unavailable` wh
 (`strategy, asset, size, maturity, bufferPct, aprBps | priceWad, sigma`). Tool failures come back as
 `isError` results whose text says what to change (e.g. "pass aprBps or priceWad").
 
-## Workflow: auto-settle (到期兜底 / borrow-and-forget)
+## Workflow: optional keeper settlement (到期辅助)
 
 On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
 collateral goes to the credit holders — which punishes exactly the borrower who judged the market
 right. A borrower can arm the MaturitySettler (profiles with `maturitySettler`; Robinhood testnet
-has it): in the final 6h window a keeper repays for them under a Dutch-auction fee cap, never
-leaving them below a floor they chose.
+has it): in the final 6h window a keeper may repay for them under a Dutch-auction fee cap, with
+successful execution constrained by their chosen floor. Arming does not guarantee a keeper,
+liquidity, execution, or timely cash availability; it is not a substitute for tracking the repay
+deadline. Do not promise automatic monitoring or rollover without explicit authorization and a
+verified available capability.
 
 ```bash
 npm run cli --silent -- settle arm ${=B} --keep 90           # one-time core grant + per-market arm: keep >= 90% of what settles
