@@ -295,6 +295,27 @@ export class BiviumClient {
     return await this.writeCore("withdrawLiquidity", [this.adapter.chainParams(this.domain, params), this.account, assets, receiver]);
   }
 
+  /// Stake collateral so a resting ASK can be backed: the mirror of `fund`, on the borrow side. The core issues
+  /// the debt out of this escrow when a lender crosses, which is why an ask from an account with none is refused
+  /// (`OnlyTakerMayBorrow`) — the offer would be a signature with no position behind it.
+  async escrowCollateral(params: MarketParams, amount: bigint): Promise<TxResult> {
+    await this.approveExact(params.collateralToken, this.profile.core, amount);
+    const id = this.marketId(params);
+    const before = await this.collateralEscrowOf(id, this.account);
+    const tx = await this.writeCore("escrowCollateral", [this.adapter.chainParams(this.domain, params), amount]);
+    const after = await this.collateralEscrowOf(id, this.account);
+    // The same postcondition `fund` carries: a token that moves less than it was told to would leave an offer
+    // backed by an amount nobody checked.
+    if (after - before !== amount) throw new Error("escrowCollateral postcondition failed: escrow delta != amount");
+    return tx;
+  }
+
+  /// Take back escrow no fill has drawn on. Authorised the way withdrawLiquidity is — the core asks for
+  /// `CAP_WITHDRAW_COLLATERAL` on the borrower, so an operator needs the grant and the owner never does.
+  async withdrawCollateralEscrow(params: MarketParams, amount: bigint, receiver: Address): Promise<TxResult> {
+    return await this.writeCore("withdrawCollateralEscrow", [this.adapter.chainParams(this.domain, params), this.account, amount, receiver]);
+  }
+
   /**
    * Borrow: approve exact collateral, fill the resting BUY offer as taker, verify the received
    * principal equals the local quote exactly.

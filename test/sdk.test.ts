@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { coreV1Abi, coreV2Abi } from "../src/sdk/abi.ts";
 import { formatAmount, parseAmount, floorFromStrike, strikeFromFloor, debtForCollateral, collateralForDebt } from "../src/sdk/math.ts";
 import { buildSignedOfferFile, offerCommitment, parseSignedOfferFile } from "../src/sdk/offer.ts";
 import { priceFromSimpleAprBps, priceToTick, simpleAprBpsFromPrice, tickToPrice, MAX_TICK, TICK_SPACING } from "../src/sdk/tick.ts";
@@ -147,4 +148,19 @@ test("the bare offerCommitment is the core-v1 scheme and NEVER matches a core-v2
   // commitment with the bare function on a v2 profile yields a hash nothing on-chain ever ratified.
   assert.notEqual(v2, offerCommitment(SESSION_OFFER));
   assert.equal(adapterFor("core-v1").offerCommitment(domain, SESSION_OFFER), offerCommitment(SESSION_OFFER));
+});
+
+test("an ask is backed by escrow the way a bid is backed by liquidity, and the ABI carries both writes", () => {
+  // The lender side had fund/withdrawLiquidity from the start; the borrow side's mirror was missing, so the CLI
+  // could quote a resting borrow order and never place one — the whole maker-borrower half of the book.
+  for (const abi of [coreV1Abi, coreV2Abi]) {
+    const names = abi.map((e) => (e as { name?: string }).name).filter(Boolean);
+    for (const fn of ["fund", "withdrawLiquidity", "escrowCollateral", "withdrawCollateralEscrow"]) {
+      assert.ok(names.includes(fn), `${fn} must be callable on both lineages`);
+    }
+  }
+  // What a stake backs: the face the core will issue out of it. 50 collateral at a 0.1 strike backs 5 of face,
+  // which is why an ask larger than that is refused before it is signed rather than after it is taken.
+  assert.equal(debtForCollateral(50n * 10n ** 18n, 10n ** 23n), 5n * 10n ** 6n);
+  assert.equal(debtForCollateral(0n, 10n ** 23n), 0n, "no stake backs no ask");
 });
