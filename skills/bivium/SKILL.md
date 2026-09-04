@@ -3,14 +3,14 @@ name: bivium
 description: >
   Use for Bivium dual-currency yield and Meme long/short trading on Robinhood Chain:
   deposit tokens or quote assets, assess delivery risk, discover and quote markets, build
-  atomic strategies, and manage DCN orders, repayment, claims, and attribution.
+  atomic strategies, manage DCN orders and settlement, or operate bounded MM and keeper sessions.
 ---
 
 # Bivium on Robinhood Chain
 
 Bivium offers dual-currency yield and Meme long/short trading through fixed-term CLOB credit
 with repay-or-deliver settlement. This Skill turns the user's goal into a risk assessment and
-bounded action. The user owns the capital, risk policy, and final signature.
+bounded action. The user owns the capital, risk policy, and signing authority.
 
 ## Start with the user's goal
 
@@ -20,6 +20,12 @@ markets, and ask only for missing material choices in everyday language. An ordi
 or sell is **not consent to dual-currency yield**: clarify that product distinction before routing.
 Lead with a short decision summary; retain the full verification payload and all material risks
 before any signature. The execution and risk-policy gates below remain mandatory.
+
+For requests to run, authorize, inspect or stop a market maker (MM) or settlement keeper, read
+[the operator guide](references/operators.md) instead of forcing the goal into a consumer strategy.
+These are separate operational roles; they do not add or rename strategy catalog IDs. Ordinary
+trades retain per-transaction approval. Automatic signatures are permitted only inside a separately
+approved, capability-verified operator session, never through the legacy combined Worker entry.
 
 ## Four primary operations
 
@@ -71,7 +77,8 @@ asset or strategy as safe.
 
 ## Required agent flow
 
-Follow this order for every proposed action:
+Follow this order for ordinary consumer actions. Operator sessions follow the linked operator
+guide, retaining the same chain, market, risk-evidence and untrusted-input boundaries.
 
 0. **Clarify intent.** Reuse the conversation context and resolve any ordinary-trade versus
    dual-currency-yield ambiguity before choosing a strategy. Do not turn a target price into
@@ -101,11 +108,12 @@ Follow this order for every proposed action:
    guide's short confirmation, followed by the detailed verification payload. Show chain, Core,
    market, strategy, account, amount, maximum loss, slippage/price bound, expiry, destination, and
    each transaction. Use `borrow quote` or `--dry-run` where supported.
-8. **Sign and execute.** The current release requires the user to approve and sign **each
-   transaction**. Short-lived scoped sessions are future work and are not implemented. Never ask
-   for, print, or pass a raw private key on the command line. Stop on any domain, lineage,
-   simulation, quote, authorization, or state mismatch; never retry a financial transaction
-   blindly.
+8. **Sign and execute.** Ordinary consumer transactions require individual user approval and
+   signature. The only automatic exception is a separately approved MM or keeper session through
+   the capability-verified executor in the operator guide; this is software policy enforcement
+   with a dedicated EOA, not a cryptographically restricted session key. Never ask for, print, or
+   pass a raw private key on the command line. Stop on domain, lineage, simulation, quote,
+   authorization or state mismatch; never retry a financial transaction blindly.
 9. **Report attribution.** Preserve and report
    `strategyId -> intentId -> orderId -> fillId -> position and realized outcome`. Use
    `strategy trace` to bind the start of that chain to chain, Core, account, quote, and nonce.
@@ -270,9 +278,11 @@ back to `--source chain`.
   partial-repay flag, gate). Markets are created lazily — the first `fund`/`fill` creates them.
 - **Lenders** escrow loan tokens (`maker fund`) and sign resting **buy offers** (bids). A borrower
   filling a bid mints **DCN** credit to the lender and takes the principal.
-- **Borrowers** never post offers to borrow — they take a maker's bid, locking collateral at the
-  strike ratio. Repay is only possible strictly **before maturity**; from maturity on, unpaid
-  collateral goes to the settlement basket and credit holders `claim` a pro-rata mix.
+- **Borrowers** can take a maker's bid, locking collateral at the strike ratio. Some deployed
+  Core lineages also support collateral-backed asks that create debt; verify the actual lineage
+  instead of assuming every ask is a resale. The bounded MM session excludes this origination
+  path and uses held credit only. Repay is possible strictly **before maturity**; unpaid
+  collateral then enters settlement and credit holders `claim` a pro-rata mix.
 - **DCN trading** is secondary transfer of that credit: asks sell held credit, bids buy it. All
   prices live on a tick grid; APR is derived display, not a protocol term.
 
@@ -425,6 +435,10 @@ compared (`skipped` for off-book pricing or multi-level sweeps, `unavailable` wh
 
 ## Workflow: optional keeper settlement (到期辅助)
 
+This section is the borrower opt-in and single-transaction reference. To operate a keeper for
+others continuously, use the operator guide: do not mistake `settle arm` for keeper startup,
+and do not use the wallet-advance example below for a no-principal-advance session.
+
 On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
 collateral goes to the credit holders — which punishes exactly the borrower who judged the market
 right. A borrower can arm the MaturitySettler (profiles with `maturitySettler`; Robinhood testnet
@@ -479,8 +493,10 @@ npm run cli --silent -- order cancel --offer ask.json
 - Sweeps execute as one atomic multicall; postconditions require the credit/cash deltas to equal
   the plan exactly. `--limit-tick` bounds the worst acceptable price; `--exact-spend` refuses
   partial absorption.
-- Buying DCN can only transfer credit the ask's maker holds — it never creates debt. Selling held
-  credit remains legal at/after maturity, but nothing guarantees bids exist then.
+- Verify whether an ask transfers held credit or uses collateral-backed origination on the
+  selected Core lineage; do not infer debt behavior from the word "ask". Bounded MM sessions
+  permit held-credit asks only. Selling held credit may remain legal at/after maturity, but
+  nothing guarantees bids exist then.
 - **"relayer unavailable — not an empty book" is an error, not an empty market.** Never report a
   failed book fetch as "no liquidity".
 
@@ -498,7 +514,8 @@ real-money quotes inform, testnet contracts transact.
 ## Rules for agents
 
 1. Testnet only. If anything suggests real funds or mainnet, stop and ask.
-2. Keys via `BIVIUM_PK`-style env vars only; never echo them, never pass as arguments.
+2. Keys stay in user-controlled private files or supported secret storage. Pass only key-file
+   paths where supported; never read, echo, log, commit or pass raw key material as arguments.
 3. Preview before spending: `--dry-run` / `quote` first, show the plan, then execute.
 4. Trust the fail-closed errors. The CLI's preflights encode protocol invariants; a blocked command
    means the state disagrees with your assumption — re-read state (`market state`, `read position`,
