@@ -278,6 +278,9 @@ export interface OpenProgramOptions {
   minOut?: bigint;
   /// The router's own fee, so this builder's `minPrincipal` is the number the router will actually hand over.
   feeBps?: bigint;
+  /// The router's lender-side fee on a resting ask. Defaults to zero for offline compatibility; live callers
+  /// must read LENDER_FEE_BPS and must not treat a failed read as a zero-fee deployment.
+  lenderFeeBps?: bigint;
   /// Override the derived top-up ceiling (native units of the collateral token).
   maxTopUp?: bigint;
   /// Override the derived principal floor (native units of the loan token).
@@ -291,7 +294,9 @@ export interface ProgramBuild {
     units: bigint;
     /// What the core will pay for the fill, exactly: the tick fixes it.
     cost: bigint;
-    /// The router's skim off the premium.
+    /// The ask's total payment including lender fee; for bids, unchanged core cost (fees are deducted instead).
+    costWithFee: bigint;
+    /// The router's fee on the premium: added to an ask's cost, deducted from a bid's principal.
     fee: bigint;
     /// What reaches the account (or the next leg) after the skim.
     principal: bigint;
@@ -328,9 +333,14 @@ export function buildOpenProgram(res: ProgramView, opts: OpenProgramOptions): Pr
   if (id === "lendAsset" || id === "lendQuote") {
     if (opts.offer.buy) throw new Error(`${id} takes a resting ask, not a bid`);
     const cost = fillCost(opts.offer, units);
+    const premium = units > cost ? units - cost : 0n;
+    const lenderFeeBps = opts.lenderFeeBps ?? 0n;
+    // OriginationFee.quoteLenderFee floors but does NOT clamp to cost: this fee is paid on top, not skimmed.
+    const fee = lenderFeeBps > 0n ? premium * lenderFeeBps / 10_000n : 0n;
+    const costWithFee = cost + fee;
     return {
-      legs: [fillAskLeg({ domain: opts.domain, ask: opts.offer, ratifierData: opts.ratifierData, units, maxCost: cost })],
-      derived: { units, cost, fee: 0n, principal: 0n, collateral: 0n, maxTopUp: 0n, minPrincipal: 0n },
+      legs: [fillAskLeg({ domain: opts.domain, ask: opts.offer, ratifierData: opts.ratifierData, units, maxCost: costWithFee })],
+      derived: { units, cost, costWithFee, fee, principal: 0n, collateral: 0n, maxTopUp: 0n, minPrincipal: 0n },
     };
   }
 
@@ -367,7 +377,7 @@ export function buildOpenProgram(res: ProgramView, opts: OpenProgramOptions): Pr
 
   return {
     legs: [fillBidLeg({ domain: opts.domain, offer: opts.offer, ratifierData: opts.ratifierData, units, maxTopUp, minPrincipal, inner })],
-    derived: { units, cost, fee, principal, collateral, maxTopUp, minPrincipal },
+    derived: { units, cost, costWithFee: cost, fee, principal, collateral, maxTopUp, minPrincipal },
   };
 }
 

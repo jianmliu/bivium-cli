@@ -1,8 +1,16 @@
 # @bivium/cli
 
-SDK and CLI for Bivium fixed-term, oracle-free credit: discover markets, inspect the CLOB, assess
-repay-or-deliver risk, construct bounded plans, sign offers, execute fills, repay, reclaim, claim,
-and preserve strategy attribution.
+SDK and CLI for Bivium dual-currency yield and Meme long/short trading on Robinhood Chain.
+Four primary operations share the same CLOB credit markets: deposit Meme (`lendAsset`), deposit
+quote assets (`lendQuote`), long Meme (`leveredLong`), and short Meme (`short`). Deposits supply
+the assets used by directional traders, with fixed-term repay-or-deliver settlement.
+
+Deposit users can take a resting ask or publish their own lender bid. Unfilled bids do not earn
+the quoted yield. At maturity, credit holders receive a pro-rata mix of repaid loan assets and
+collateral from unpaid debt; the deposited asset and principal value are not guaranteed.
+Directional previews should lead with break-even, all-in outlay, maximum loss and executable
+size, rather than annualized borrowing cost. Discover current venue expiries instead of assuming
+a weekly series. Meme collateral can become worthless even while settlement works as designed.
 
 **Robinhood Chain testnet `46630` is the only executable public target.** Robinhood Chain mainnet
 `4663`: do not write, construct, sign, or submit transactions there. Mainnet is identity/reference-
@@ -24,8 +32,9 @@ runtime. Never put a private key in command arguments or logs.
 
 ## Strategy CLI
 
-The strategy surface has six read-only commands. `catalog`, `assess`, and `trace` require
-`--json`; `list`, `quote`, and `plan` support either human-readable output or `--json`:
+The strategy surface includes six discovery/analysis commands and an atomic program path.
+`catalog`, `assess`, and `trace` require `--json`; `list`, `quote`, and `plan` support either
+human-readable output or `--json`. `program` previews calldata; `execute` submits transactions:
 
 ```bash
 # Product catalog and aliases
@@ -73,7 +82,7 @@ high a floor reverts, too low a floor fills badly). With none of the three it re
 `execute` grants the router `CAP_FILL | CAP_WITHDRAW_COLLATERAL` once, approves exactly what the program may draw,
 and sends it; an ask-only program needs no grant at all, because the router is the taker there.
 
-`catalog` exposes the initial `lendAsset`, `lendQuote`, and `short` products and their aliases.
+`catalog` exposes the initial `lendAsset`, `lendQuote`, `leveredLong`, and `short` products and their aliases.
 `assess` reports facts, warnings, unknowns, `MEME_DELIVERY_RISK` where applicable, stress outcomes,
 and an `agent-policy` decision from `DEFAULT_AGENT_POLICY`. `trace` binds `strategyId` and `quoteId`
 to the selected profile's chain and Core plus the user's account and nonce. `list` exposes the
@@ -84,6 +93,21 @@ minimum-output, and deadline bounds and labels the result `intent`, `router`, or
 `sequential`. None of the six commands signs or executes a transaction. A plan is a preview, not
 authorization; execution still uses the existing write commands and a fresh user approval and
 signature per transaction on Robinhood Chain testnet `46630` only.
+
+### Fees on current routers
+
+Fee-bearing routers charge only the side crossing the book, based on the fill's premium
+(`max(face - core cost, 0)`). A taker-borrower pays from principal using `FEE_BPS`; a taker-lender
+pays on top of core cost using `LENDER_FEE_BPS`. The lender's `maxCost` and token allowance cover
+that total. Read rates from the selected deployment; a failed fee read must not silently become
+zero. Older routers without the lender-fee getter require a compatible deployment before this
+lender execution path can be quoted.
+
+This origination fee is collected at execution, not from later realized profit. Resting makers
+pay no such router fee; repay/close carry no origination fee. Gas, swap costs and keeper fees are
+separate. Core remains administrator-free and fee-free; optional gated series restrict their
+own origination routes. The fee-inclusive program preview determines execution bounds; an
+indicative payoff quote is not automatically net of every cost.
 
 ### Read-only MCP twin
 
@@ -376,3 +400,8 @@ npm run typecheck
 ```
 
 The distributable Skill is [skills/bivium/SKILL.md](skills/bivium/SKILL.md).
+Its [conversation guide](skills/bivium/references/conversation.md) starts from everyday goals
+such as earning on held Meme, dual-currency target buying, going long or going short. The agent
+discovers terms and asks only for missing material choices, then presents outcomes and a short
+confirmation with transaction details. Ordinary spot limit orders are not silently converted
+into dual-currency products; simpler wording does not remove risk checks or per-transaction signing.

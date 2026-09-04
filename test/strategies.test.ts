@@ -45,7 +45,7 @@ test("catalog: aliases resolve to stable ids and initial products expose outcome
 
   assert.deepEqual(
     STRATEGIES.filter((s) => s.initialRelease).map((s) => s.id).sort(),
-    ["lendAsset", "lendQuote", "short"],
+    ["lendAsset", "lendQuote", "leveredLong", "short"],
   );
   for (const s of STRATEGIES) {
     assert.ok(s.outcomeLabels.length >= 2, `${s.id} needs at least two outcome labels`);
