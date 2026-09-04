@@ -69,6 +69,10 @@ export interface StrategyDef {
   mirrorOf?: string;
   /** False for combos that need the Router before they can be quoted as one unit. */
   quotable: boolean;
+  /** True for a strategy quoted through a MULTI-market path instead. `quotable` stays false for these — it means
+   *  "one market", and that is exactly what a straddle is not — so a caller must not reach them through
+   *  `resolveStrategy`/`quoteStrategy`, which would silently price one leg and call it the position. */
+  composite?: true;
   inputs: InputField[];
 }
 

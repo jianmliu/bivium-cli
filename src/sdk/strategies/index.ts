@@ -5,6 +5,7 @@ export * from "./payoff.ts";
 export * from "./catalog.ts";
 export * from "./resolve.ts";
 export * from "./quote.ts";
+export * from "./straddle.ts";
 export * from "./plan.ts";
 export * from "./risk.ts";
 export * from "./stress.ts";
