@@ -14,6 +14,7 @@ export * from "./payoff.ts";
 export * from "./catalog.ts";
 export * from "./resolve.ts";
 export * from "./quote.ts";
+export * from "./straddle.ts";
 // The leg program and the pool a swap leg runs on. Both are pure: `program.ts` only encodes, and every chain read
 // in `pools.ts` is handed in as an `EthCall`, so the browser supplies viem and this entry keeps its no-I/O promise.
 export * from "./program.ts";

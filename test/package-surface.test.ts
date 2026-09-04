@@ -21,6 +21,7 @@ const ALLOWED = new Set([
   "src/sdk/strategies/catalog.ts",
   "src/sdk/strategies/resolve.ts",
   "src/sdk/strategies/quote.ts",
+  "src/sdk/strategies/straddle.ts",
   // The leg program and its pool reads: encoding and arithmetic only, with every chain call handed in.
   "src/sdk/strategies/program.ts",
   "src/sdk/strategies/pools.ts",

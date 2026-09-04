@@ -149,6 +149,9 @@ export const STRATEGIES: readonly StrategyDef[] = [
     worstCaseForm: "premium",
     otmDirection: "below",
     quotable: false,
+    // Not one market, so not `quotable` — but resolvable and priceable through `resolveStraddle`/`quoteStraddle`,
+    // which compose the two single-leg positions rather than inventing a third kind of arithmetic.
+    composite: true,
     inputs: [asset, size, maturity, bufferPct],
   },
   {
