@@ -17,6 +17,11 @@ export const CAP_WITHDRAW_COLLATERAL = 1n << 3n;
 /// What a program that borrows, repays or withdraws needs. An ask-only program needs none of it.
 export const PROGRAM_CAPS = CAP_FILL | CAP_WITHDRAW_COLLATERAL;
 
+const gateAbi = parseAbi([
+  "function routers() view returns (address[])",
+  "function LENDER_MUST_ROUTE() view returns (bool)",
+]);
+
 const routerAbi = parseAbi([
   "struct Leg { uint8 kind; bytes data; }",
   "function execute(Leg[] program, uint256 deadline) returns (uint256[])",
@@ -55,6 +60,20 @@ export class StrategyRouterClient extends BiviumClient {
   /// One `eth_call`, for the pool reads a swap leg's floor is cut from.
   get ethCall(): (to: Address, data: Hex) => Promise<Hex> {
     return async (to, data) => (await this.pub.call({ to, data })).data ?? "0x";
+  }
+
+  /// The routers a market's gate admits, and whether it routes lenders. Asked of the GATE rather than taken from
+  /// the profile, because a profile names one router and a deployment can run several gate generations at once —
+  /// the fee rule changed by opening a new series, so the market decides which router it accepts, not the config.
+  /// A gate with no `LENDER_MUST_ROUTE` is the first generation, and that absence is the answer: it routes only
+  /// borrowers.
+  async gateRouting(gate: Address): Promise<{ routers: Address[]; lenderMustRoute: boolean }> {
+    const routers = [...(await this.pub.readContract({ address: gate, abi: gateAbi, functionName: "routers" }) as readonly Address[])];
+    let lenderMustRoute = false;
+    try {
+      lenderMustRoute = await this.pub.readContract({ address: gate, abi: gateAbi, functionName: "LENDER_MUST_ROUTE" }) as boolean;
+    } catch { lenderMustRoute = false; }
+    return { routers, lenderMustRoute };
   }
 
   feeBps(): Promise<bigint> {

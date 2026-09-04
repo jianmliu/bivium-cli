@@ -313,7 +313,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   const router = getAddress(
     typeof v.router === "string" ? v.router : (ctx.profile.strategyRouter ?? fail("no --router and the profile has no strategyRouter for this chain")),
   ) as Address;
-  const c = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, router);
+  const client = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, router);
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
   const deadline = typeof v.deadline === "string" ? BigInt(v.deadline) : nowSec + 600n;
   const grantExpiry = typeof v.ttl === "string" ? nowSec + BigInt(v.ttl) : 0n;
@@ -333,7 +333,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     let ceiling: Awaited<ReturnType<typeof swapCeiling>> | undefined;
     if (via === "flash") {
       ceiling = await swapCeiling({
-        call: c.ethCall, key, tokenIn: params.collateralToken, amountOut: assets, slippageBps,
+        call: client.ethCall, key, tokenIn: params.collateralToken, amountOut: assets, slippageBps,
         explicit: typeof v["max-settle-in"] === "string" ? parseAmount(v["max-settle-in"], collateralDecimals) : undefined,
         stateView: ctx.profile.v4StateView,
       });
@@ -342,7 +342,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     const legs = buildUnwindProgram({ domain, params, assets, via, poolKey: key, maxSettleIn });
     const approvals: [Address, bigint][] = via === "wallet" ? [[params.loanToken, assets]] : [];
     return {
-      client: c, legs, deadline, grantExpiry, approvals,
+      client, legs, deadline, grantExpiry, approvals,
       json: {
         router, mode: "unwind", via, assets: assets.toString(), deadline: deadline.toString(),
         ceiling: ceiling ? { maxIn: ceiling.maxIn.toString(), source: ceiling.source, estimate: ceiling.estimate.toString(), slippageBps: ceiling.slippageBps } : null,
@@ -361,6 +361,27 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   const strategy = getStrategy(need(v.strategy as string | undefined, "strategy"));
   const file = parseSignedOfferFile(readFileSync(need(v.offer as string | undefined, "offer"), "utf8"), ctx.profile);
   const params = marketParamsFromOffer(file.offer);
+  // A gated market decides which router it accepts, and this deployment runs more than one gate generation at
+  // once — the fee rule changed by opening a new series, not by changing a setting. So the profile's router is a
+  // default, not an answer: ask the gate before building a program it would refuse.
+  let c = client;
+  if (params.gate.toLowerCase() !== ZERO_ADDRESS.toLowerCase()) {
+    const { routers, lenderMustRoute } = await client.gateRouting(params.gate);
+    if (!file.offer.buy && !lenderMustRoute) {
+      fail(
+        `this market's gate ${params.gate} does not route lenders, so a lend fills the ask directly on the core; `
+          + "building a router program here would charge a fee the gate never asks for",
+      );
+    }
+    const admitted = routers.map((r) => r.toLowerCase());
+    if (!admitted.includes(client.router.toLowerCase())) {
+      if (typeof v.router === "string") {
+        fail(`--router ${client.router} is not admitted by this market's gate ${params.gate}, which lists ${routers.join(", ")}`);
+      }
+      if (routers.length === 0) fail(`this market's gate ${params.gate} admits no routers, so it cannot be originated at all`);
+      c = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, routers[0]);
+    }
+  }
   const loanDecimals = await tokenDecimals(ctx, params.loanToken);
   const collateralDecimals = await tokenDecimals(ctx, params.collateralToken);
   const units = parseAmount(need(v.units as string | undefined, "units"), loanDecimals);
