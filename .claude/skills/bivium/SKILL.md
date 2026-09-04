@@ -1,16 +1,41 @@
 ---
 name: bivium
 description: >
-  Use when a user wants to discover, assess, quote, or execute Bivium fixed-term credit and
-  repay-or-deliver strategies on Robinhood Chain, including Earn on Holdings, Buy at Target,
-  Capped-Risk Short, DCN trading, repayment, delivery, claims, or strategy attribution.
+  Use for Bivium dual-currency yield and Meme long/short trading on Robinhood Chain:
+  deposit tokens or quote assets, assess delivery risk, discover and quote markets, build
+  atomic strategies, and manage DCN orders, repayment, claims, and attribution.
 ---
 
 # Bivium on Robinhood Chain
 
-Bivium is fixed-term, oracle-free credit with a CLOB and repay-or-deliver settlement. This Skill
-turns a user's goal into an inspectable risk decision and a bounded Bivium action. The user owns
-the capital, risk policy, and final signature.
+Bivium offers dual-currency yield and Meme long/short trading through fixed-term CLOB credit
+with repay-or-deliver settlement. This Skill turns the user's goal into a risk assessment and
+bounded action. The user owns the capital, risk policy, and final signature.
+
+## Four primary operations
+
+| User goal | Strategy ID | Asset flow |
+|---|---|---|
+| Deposit Meme for yield / sell at a target | `lendAsset` | Supply the Meme that short traders borrow; settlement can return Meme, quote collateral, or a pooled mix. |
+| Deposit quote assets for yield / buy at a target | `lendQuote` | Supply quote assets that long traders borrow; settlement can return quote assets, Meme collateral, or a pooled mix. |
+| Long Meme | `leveredLong` | Borrow quote assets against Meme and swap the proceeds into more Meme. |
+| Short Meme | `short` | Borrow Meme against quote collateral and swap the proceeds into quote assets. |
+
+The first two operations are **dual-currency yield**; the latter two are **directional trading**.
+These are four views of the same credit books. Preserve their stable IDs; `protectivePut` remains
+available as the variant that keeps borrowed cash instead of buying more Meme, not a fifth primary
+operation. Stock-token and relative-value tools remain in the wider catalog.
+
+Discover the venue's current asset addresses, expiries and strikes. Do not infer a weekly maturity
+or copy a stale three-day listing. For deposits, offer either immediate fills or resting lender
+bids: an empty ask book still permits a user-priced deposit order. Funding or publishing a bid
+does not itself earn yield; the credit exposure starts when it fills.
+
+For directional trades, lead with break-even, all-in outlay, available size and maximum loss.
+Show the strike separately as the repay/deliver term; crossing it is not the threshold for profit.
+For yield, show term return after fees and both settlement assets; APR is supplementary and does
+not promise repayment in the deposited token. Settlement follows actual repayment, not a price
+oracle assigning every borrower automatically at the strike.
 
 ## Execution boundary
 
@@ -44,7 +69,7 @@ Follow this order for every proposed action:
    identity; a different token, strike, maturity, partial-repay flag, gate, chain, or Core is a
    separate market and fragments liquidity.
 2. **Catalog and resolve the goal.** Run `strategy catalog --json`. Resolve the goal to an initial
-   strategy (`lendAsset`, `lendQuote`, or `short`) and an existing market. Never describe a
+   strategy (`lendAsset`, `lendQuote`, `leveredLong`, or `short`) and an existing market. Never describe a
    non-atomic multi-leg sequence as atomic.
 3. **Gather evidence.** Record asset capabilities, transfer restrictions, holder concentration,
    executable depth and slippage, reference-source identity and freshness, and sellability. Mark
@@ -78,6 +103,28 @@ For Meme collateral, always emit `MEME_DELIVERY_RISK` prominently before funding
 the lender all three facts: the borrower may rationally choose not to repay; delivery may be a
 severely impaired or worthless token; and settlement can operate correctly while the lender loses
 all economically recoverable principal. No-liquidation is a settlement rule, not rug prevention.
+
+## Atomic programs and current fees
+
+StrategyRouter is implemented. On a profile with a compatible deployed `strategyRouter`,
+`strategy program` builds an ordered `Leg[]`, and `strategy execute` submits the program as one
+atomic call after any necessary grant and token-approval transactions. Borrow-and-swap runs
+inside the fill callback; honor `maxTopUp`, `minPrincipal`, `minOut`, `maxCost`, and the deadline.
+A generic `strategy plan` is still a preview; a `sequential` fallback does not provide atomicity.
+Do not promise a usable route until the current market, router, gate and swap liquidity agree.
+
+Current fee-bearing routers charge the side that crosses the book a share of the fill's premium
+(`face - core cost`, floored at zero). The taker-borrower's fee reduces principal; the
+taker-lender's fee increases total cost. Read the selected router's `FEE_BPS` or
+`LENDER_FEE_BPS` for the relevant side; a failed read is not a zero fee. Resting makers do not
+pay this router origination fee, and repayment/close do not incur it (gas, swaps and keeper fees
+are separate). This is an upfront premium-based fee, not a fee on eventual trading profit or
+a high-water-mark performance fee. Core has no fee administrator; optional OriginationGate
+series enforce their chosen routing policy. Do not assume all permissionless markets share it.
+
+Use the fee-inclusive `strategy program` preview for execution amounts. Indicative strategy
+payoff quotes must not be described as net of all costs unless those fees, swaps and gas have
+actually been included.
 
 ## Optional external inputs
 
@@ -301,8 +348,10 @@ npm run cli --silent -- strategy plan  --strategy short --asset mAI --size 10000
 - Pricing off the book (`--source relayer`) needs a RESTING bid (borrower) / ask (lender) on the resolved
   market; on a thin testnet it will say so — quote a target rate with `--apr-bps <n>` (or `--price <wad>`) instead.
 - `--sigma` (annualised realised vol, e.g. `7.11` = 711%) is advisory: it only feeds P(exercise).
-- Combos (`straddle`, `shortVol`, `collar`, `spread`) are listed but not quotable as one unit until
-  the Router lands — quote each leg separately.
+- The SDK supports `resolveStraddle`/`quoteStraddle` as a composition of two positions. Availability
+  still requires a declared, compatible series pair and executable liquidity. Other listed
+  combinations may lack a complete product route even though StrategyRouter exists; use the
+  current catalog and route capability instead of treating every combination as executable.
 
 ### Which ratifier attests your offers
 

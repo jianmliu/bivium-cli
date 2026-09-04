@@ -3,6 +3,8 @@ import { getAddress } from "viem";
 import {
   assessRisk,
   catalogJson,
+  initialReleaseIds,
+  STRATEGY_ALIASES,
   startTrace,
   stressDelivery,
   type Address,
@@ -17,12 +19,6 @@ export interface StrategyCliContext {
   values: Record<string, string | boolean | undefined>;
 }
 
-const ALIASES = Object.freeze({
-  earnOnHoldings: "lendAsset",
-  buyAtTarget: "lendQuote",
-  cappedRiskShort: "short",
-});
-const INITIAL_RELEASE = Object.freeze(["lendAsset", "lendQuote", "short"]);
 const RISK_KEYS = new Set([
   "mintable", "freezable", "blacklistable", "upgradeable", "sellability",
   "top10HolderPct", "exitSlippageBps", "referencePrice",
@@ -123,7 +119,7 @@ function parseRiskFile(path: string): {
 export function runStrategyCommand(subcommand: string, ctx: StrategyCliContext): unknown {
   if (!ctx.json) throw new Error("--json is required for strategy commands");
   if (subcommand === "catalog") {
-    return { catalog: catalogJson(), aliases: ALIASES, initialRelease: INITIAL_RELEASE };
+    return { catalog: catalogJson(), aliases: STRATEGY_ALIASES, initialRelease: initialReleaseIds() };
   }
   if (subcommand === "assess") {
     const risk = parseRiskFile(required(ctx.values, "risk-file"));

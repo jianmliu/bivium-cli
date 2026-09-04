@@ -22,6 +22,7 @@ const routerAbi = parseAbi([
   "function execute(Leg[] program, uint256 deadline) returns (uint256[])",
   "function quoteLeg(uint256 units, uint256 cost) view returns (uint256 fee, uint256 principalAfterFee)",
   "function FEE_BPS() view returns (uint256)",
+  "function LENDER_FEE_BPS() view returns (uint256)",
   "function FEE_RECIPIENT() view returns (address)",
   "function MAX_LEGS() view returns (uint256)",
 ]);
@@ -58,6 +59,18 @@ export class StrategyRouterClient extends BiviumClient {
 
   feeBps(): Promise<bigint> {
     return this.pub.readContract({ address: this.router, abi: routerAbi, functionName: "FEE_BPS" }) as Promise<bigint>;
+  }
+
+  /// A missing getter on an older router or a failed RPC read is not evidence of a zero lender fee.
+  async lenderFeeBps(): Promise<bigint> {
+    try {
+      return await this.pub.readContract({ address: this.router, abi: routerAbi, functionName: "LENDER_FEE_BPS" });
+    } catch (cause) {
+      throw new Error(
+        `Cannot read LENDER_FEE_BPS from StrategyRouter ${this.router}; the router may be unsupported or the RPC unavailable. Verify a compatible router and RPC, then re-quote before executing; refusing to assume zero lender fee.`,
+        { cause },
+      );
+    }
   }
 
   /// The router's own view of a bid leg's fee, so a caller can show the all-in number before signing.

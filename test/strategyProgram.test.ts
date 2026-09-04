@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeAbiParameters } from "viem";
+import { decodeAbiParameters, parseAbiParameters } from "viem";
 import {
   LEG_KIND,
   buildOpenProgram,
@@ -160,13 +160,59 @@ test("a swap-carrying strategy refuses to be built without the pool and the floo
   );
 });
 
-test("a lend is one ask leg whose ceiling is the cost the core will charge, to the wei", () => {
+test("a lend defaults to zero lender fee for existing pure-builder callers", () => {
   const units = 2_000n * 10n ** 6n;
   const build = buildOpenProgram(view("lendQuote", PUT), { domain: DOMAIN, offer: offerOn(PUT, false), units });
   assert.equal(build.legs.length, 1);
   assert.equal(build.legs[0].kind, LEG_KIND.FILL_ASK);
   assert.equal(build.derived.cost, fillCost(offerOn(PUT, false), units));
-  assert.equal(build.derived.fee, 0n, "the taker-lender pays no origination");
+  assert.equal(build.derived.fee, 0n, "omitting the lender fee preserves the old pure-builder behavior");
+});
+
+const ASK_PAYLOAD = parseAbiParameters([
+  "struct Offer { uint256 chainId; address bivium; address loanToken; address collateralToken; uint256 maturity; uint256 strike; bool allowPartialRepay; address gate; address maker; bool buy; uint256 tick; uint256 maxUnits; uint256 maxAssets; uint256 start; uint256 expiry; bytes32 group; address ratifier; }",
+  "struct FillAsk { Offer ask; bytes ratifierData; uint256 units; uint256 maxCost; }",
+  "FillAsk",
+]);
+
+for (const [strategyId, params] of [["lendQuote", PUT], ["lendAsset", CALL]] as const) {
+  test(`${strategyId} encodes the exact cost plus lender fee as its maxCost`, () => {
+    const units = 2_000_001n;
+    const offer = offerOn(params, false);
+    const build = buildOpenProgram(view(strategyId, params), {
+      domain: DOMAIN, offer, units, feeBps: 2_000n, lenderFeeBps: 1_000n,
+    });
+    const cost = fillCost(offer, units);
+    const fee = (units - cost) * 1_000n / 10_000n;
+    assert.ok(fee > 0n);
+    assert.equal(build.derived.fee, fee);
+    assert.equal(build.derived.costWithFee, cost + fee);
+    const [decoded] = decodeAbiParameters(ASK_PAYLOAD, build.legs[0].data);
+    assert.equal(decoded.maxCost, cost + fee);
+    assert.equal(decoded.units, units);
+  });
+}
+
+test("lender fees floor and do not inherit the borrower's principal clamp", () => {
+  const offer = { ...offerOn(PUT, false), tick: 0n };
+  const build = buildOpenProgram(view("lendQuote", PUT), {
+    domain: DOMAIN, offer, units: 100n, lenderFeeBps: 2_000n,
+  });
+  assert.equal(build.derived.cost, 1n);
+  assert.equal(build.derived.fee, 19n, "99 * 20% floors to 19, not clamped to the core cost of 1");
+  assert.equal(build.derived.costWithFee, 20n);
+  const par = buildOpenProgram(view("lendQuote", PUT), {
+    domain: DOMAIN, offer: { ...offer, tick: 5820n }, units: 100n, lenderFeeBps: 2_000n,
+  });
+  assert.equal(par.derived.fee, 0n);
+  assert.equal(par.derived.costWithFee, 100n);
+});
+
+test("lender fee configuration never changes a bid program", () => {
+  const opts = { domain: DOMAIN, offer: offerOn(PUT, true), units: 2_000_001n, feeBps: 1_000n };
+  const bid = buildOpenProgram(view("protectivePut", PUT), opts);
+  assert.deepEqual(buildOpenProgram(view("protectivePut", PUT), { ...opts, lenderFeeBps: 2_000n }), bid);
+  assert.equal(bid.derived.fee, originationFee(opts.units, bid.derived.cost, opts.feeBps));
 });
 
 test("an unwind is pull-repay-withdraw out of pocket, or one flash leg out of the collateral", () => {

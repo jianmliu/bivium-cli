@@ -6,7 +6,7 @@ import type { InputField, StrategyDef } from "./types.ts";
 const asset: InputField = { name: "asset", type: "address", required: true, description: "the asset the view is about" };
 const counter: InputField = { name: "counter", type: "address", required: true, description: "the other leg of a relative strategy" };
 const size: InputField = { name: "size", type: "bigint", required: true, description: "size in the asset's native units" };
-const maturity: InputField = { name: "maturity", type: "maturity", required: true, description: "an existing maturity (weekly series default: nearest Friday)" };
+const maturity: InputField = { name: "maturity", type: "maturity", required: true, description: "an existing future maturity from market discovery; use the venue's listed tenor, not an assumed weekly expiry" };
 const bufferPct: InputField = { name: "bufferPct", type: "number", required: true, description: "strike buffer vs spot in the OTM direction, percent" };
 
 export const STRATEGIES: readonly StrategyDef[] = [
@@ -16,7 +16,7 @@ export const STRATEGIES: readonly StrategyDef[] = [
     initialRelease: true,
     outcomeLabels: ["Repay borrowed asset", "Forfeit quote collateral"],
     name: "无清算做空",
-    oneLiner: "借入资产并立即卖出。跌了买回还币；涨破 K 就放弃抵押——亏损封顶，中途没人能动你的仓位。",
+    oneLiner: "借入 Meme 并卖出；到期前可买回还币，或放弃抵押交割。展示盈亏平衡价、开仓成本与最大损失，期间无价格触发清算。",
     group: "bearish",
     side: "borrow",
     line: "options",
@@ -56,10 +56,10 @@ export const STRATEGIES: readonly StrategyDef[] = [
   // ── 看多 ──
   {
     id: "leveredLong",
-    initialRelease: false,
+    initialRelease: true,
     outcomeLabels: ["Repay borrowed quote", "Deliver asset collateral"],
     name: "有地板的杠杆多头",
-    oneLiner: "抵押 C 借现金，现金再买 C。杠杆上限由 strike 决定，最坏结果是交割 C——永远不会被针打爆。",
+    oneLiner: "抵押 Meme 借入报价资产，再买入更多 Meme。兼容 Router 可原子执行；展示盈亏平衡价、杠杆与最大损失，期间无价格触发清算。",
     group: "bullish",
     side: "borrow",
     line: "credit",
@@ -99,7 +99,7 @@ export const STRATEGIES: readonly StrategyDef[] = [
     initialRelease: true,
     outcomeLabels: ["Asset repaid", "Asset called away"],
     name: "带薪止盈",
-    oneLiner: "出借 asset，收固定 premium；涨到 K 被叫走 = 在目标价止盈。一张会付你钱的限价卖单。",
+    oneLiner: "存入 Meme 并挂出借报价，成交后赚取期限收益；到期按实际还款比例收到 Meme、报价抵押资产或两者组合，可用于目标价卖出。",
     group: "yield",
     side: "lend",
     line: "options",
@@ -117,7 +117,7 @@ export const STRATEGIES: readonly StrategyDef[] = [
     initialRelease: true,
     outcomeLabels: ["Quote repaid", "Asset assigned at target"],
     name: "带薪抄底",
-    oneLiner: "出借现金，收 premium；C 跌到 K 被指派 = 以目标价买入。一张会付你钱的限价买单。",
+    oneLiner: "存入报价资产并挂出借报价，成交后赚取期限收益；到期可能收到 Meme 抵押品，可用于目标价买入，但抵押品归零可损失本金。",
     group: "yield",
     side: "lend",
     line: "credit",
@@ -216,11 +216,16 @@ export const STRATEGIES: readonly StrategyDef[] = [
   },
 ];
 
-const STRATEGY_ALIASES: Readonly<Record<string, string>> = {
+export const STRATEGY_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   earnOnHoldings: "lendAsset",
   buyAtTarget: "lendQuote",
   cappedRiskShort: "short",
-};
+});
+
+/** Stable discovery order shared by the SDK and CLI; flags are the single source of membership. */
+export function initialReleaseIds(): string[] {
+  return STRATEGIES.filter((strategy) => strategy.initialRelease).map((strategy) => strategy.id).sort();
+}
 
 export function getStrategy(id: string): StrategyDef {
   const stableId = STRATEGY_ALIASES[id] ?? id;

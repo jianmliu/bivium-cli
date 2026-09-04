@@ -383,13 +383,14 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
 
   const carriesSwap = strategy.requires.includes("swap");
   const key = poolKeyFor(params.collateralToken, params.loanToken, poolFee, poolSpacing, poolHooks);
+  const feeBps = file.offer.buy ? await c.feeBps() : 0n;
+  const lenderFeeBps = file.offer.buy ? 0n : await c.lenderFeeBps();
   let floor: Awaited<ReturnType<typeof swapFloor>> | undefined;
   if (carriesSwap) {
     if (!poolKeyCarries(key, params.loanToken, params.collateralToken)) fail("the pool key does not name this market's pair");
     // The swap spends what the fill produced, so its input is the principal after the router's fee.
-    const feeBps = await c.feeBps().catch(() => 0n);
     const cost = fillCost(file.offer, units);
-    const { principalAfterFee } = await c.quoteLeg(units, cost).catch(() => ({ fee: 0n, principalAfterFee: cost }));
+    const { principalAfterFee } = await c.quoteLeg(units, cost);
     const tokenIn = strategy.id === "leveredLong" ? o.numeraire : o.asset;
     const inDecimals = tokenIn.toLowerCase() === params.loanToken.toLowerCase() ? loanDecimals : collateralDecimals;
     const outDecimals = inDecimals === loanDecimals ? collateralDecimals : loanDecimals;
@@ -398,9 +399,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
       explicit: typeof v["min-out"] === "string" ? parseAmount(v["min-out"], outDecimals) : undefined,
       quoter: ctx.profile.v4Quoter, stateView: ctx.profile.v4StateView,
     });
-    void feeBps;
   }
-  const feeBps = await c.feeBps().catch(() => 0n);
   const build = buildOpenProgram(view, {
     domain,
     offer: file.offer,
@@ -409,11 +408,12 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     poolKey: carriesSwap ? key : undefined,
     minOut: floor?.minOut,
     feeBps,
+    lenderFeeBps,
   });
-  // What the router may draw from the account: the collateral top-up on a bid, the cost on an ask.
+  // What the router may draw from the account: the collateral top-up on a bid, cost plus lender fee on an ask.
   const approvals: [Address, bigint][] = file.offer.buy
     ? [[params.collateralToken, build.derived.maxTopUp]]
-    : [[params.loanToken, build.derived.cost]];
+    : [[params.loanToken, build.derived.costWithFee]];
   return {
     client: c, legs: build.legs, deadline, grantExpiry, approvals,
     json: {
@@ -426,7 +426,9 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     },
     human: [
       `${strategy.id} on ${row.collateralSymbol ?? params.collateralToken}/${row.loanSymbol ?? params.loanToken}: ${formatAmount(units, loanDecimals)} face`,
-      `  cost ${formatAmount(build.derived.cost, loanDecimals)}  fee ${formatAmount(build.derived.fee, loanDecimals)}  principal ${formatAmount(build.derived.principal, loanDecimals)}`,
+      file.offer.buy
+        ? `  cost ${formatAmount(build.derived.cost, loanDecimals)}  fee ${formatAmount(build.derived.fee, loanDecimals)}  principal ${formatAmount(build.derived.principal, loanDecimals)}`
+        : `  core cost ${formatAmount(build.derived.cost, loanDecimals)}  lender fee ${formatAmount(build.derived.fee, loanDecimals)}  total cost / approval ${formatAmount(build.derived.costWithFee, loanDecimals)}`,
       `  the strike wants ${formatAmount(build.derived.collateral, collateralDecimals)} collateral; at most ${formatAmount(build.derived.maxTopUp, collateralDecimals)} comes from you`,
       floor ? `  swap floor ${formatAmount(floor.minOut, collateralDecimals)} (${floor.source}, ${floor.slippageBps} bps off ${formatAmount(floor.estimate, collateralDecimals)})` : "  no swap leg",
       `  ${build.legs.length} leg(s), deadline ${deadline}`,

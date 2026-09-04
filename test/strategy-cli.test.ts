@@ -28,7 +28,13 @@ test("strategy CLI: catalog emits aliases and a stable initial release", () => {
     buyAtTarget: "lendQuote",
     cappedRiskShort: "short",
   });
-  assert.deepEqual(body.initialRelease, ["lendAsset", "lendQuote", "short"]);
+  assert.deepEqual(body.initialRelease, ["lendAsset", "lendQuote", "leveredLong", "short"]);
+  assert.deepEqual(
+    [...body.initialRelease].sort(),
+    body.catalog.filter((entry: { initialRelease: boolean }) => entry.initialRelease)
+      .map((entry: { id: string }) => entry.id).sort(),
+    "CLI discovery must agree with SDK product flags",
+  );
 });
 
 test("strategy CLI: commands require JSON mode", () => {
