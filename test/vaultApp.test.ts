@@ -216,3 +216,13 @@ test("the shipped Robinhood profile names the routers the w0918 fee gate admits"
   assert.equal(p.strategyRouter, "0x2f6036fFA0F1c3fc592d2948e9fB7f67eaaf96bB");
   assert.equal(p.shortRouter, "0xF7F8f64F8832D104743C30b727158e408Fd02BA8");
 });
+
+test("a gated market's router comes from its gate, because a deployment can run more than one generation", () => {
+  // The profile names one router. On this chain two gate generations are live at once — the fee rule changed by
+  // opening a new series, not by changing a setting — so the profile's router is the default for a gate-free
+  // market and the gate's own list is the answer for a gated one. A program built against the wrong generation is
+  // refused on-chain by OriginationMustRouteThroughFeeRouter, which is a revert, not a worse price.
+  const p = loadProfile("profiles/robinhood-testnet.json");
+  assert.equal(p.strategyRouter, "0x2f6036fFA0F1c3fc592d2948e9fB7f67eaaf96bB");
+  assert.equal(p.shortRouter, "0xF7F8f64F8832D104743C30b727158e408Fd02BA8");
+});
