@@ -26,6 +26,7 @@ import {
   loadProfile,
   marketParamsFromOffer,
   offerCommitment,
+  debtForCollateral,
   parseAmount,
   parseSignedOfferFile,
   priceFromSimpleAprBps,
@@ -94,7 +95,9 @@ usage: bivium <command> [options]
   read position|credit|liquidity --account <addr>
   maker ratify-root (--offer <f>[,<f>...] | --commitment <hash>[,<hash>...]) [--maker <addr>] [--off]  # approve a whole book with ONE on-chain flag
   maker set-ratifier [--off]
-  maker fund --assets <human>
+  maker fund --assets <human>                        # lender: stake loan token so a BID can be filled
+  maker escrow --assets <human>                      # borrower: stake collateral so an ASK can be filled
+  maker withdraw-escrow --assets <human> [--receiver <addr>]
   maker withdraw-liquidity --assets <human> [--receiver <addr>]
   maker wizard                        # interactive quoting: pick market -> amount -> price -> confirm
   maker make-offer --side buy|sell (--tick <n> | --apr-bps <n>) --max-units <human>
@@ -712,6 +715,20 @@ const { params, loanDecimals, collateralDecimals } = market;
   }
   const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
   const account = accountFor(ctx);
+  if (side === "sell") {
+    // A resting ask is issued out of the maker's collateral escrow, so an ask larger than the escrow behind it is
+    // an offer the core refuses at fill (`OnlyTakerMayBorrow`) and the relayer refuses at publish. Better to say
+    // so here, with the number, than to leave a signature on the book that nobody can take.
+    const c = client(ctx, false);
+    const escrow = await c.collateralEscrowOf(c.marketId(params), account.address as Address);
+    const backs = debtForCollateral(escrow, params.strike);
+    if (backs < maxUnits) {
+      fail(
+        `this ask offers ${formatAmount(maxUnits, loanDecimals)} face but the escrow behind it backs only `
+          + `${formatAmount(backs, loanDecimals)}. Stake more first: maker escrow --assets <collateral>`,
+      );
+    }
+  }
   const rat = resolveRatifierOr(ctx);
   const offer: Offer = {
     ...params,
@@ -1295,6 +1312,30 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const c = client(ctx, true);
     const tx = await c.fund(params, assets);
     output(ctx.json, { ...tx, assets }, `funded ${formatAmount(assets, loanDecimals)} into ${c.marketId(params)}: ${tx.hash}`);
+  },
+
+  "maker escrow": async (ctx) => {
+    const { params, collateralDecimals } = await resolveMarket(ctx);
+    const amount = parseAmount(need(ctx.values.assets as string | undefined, "assets"), collateralDecimals);
+    const c = client(ctx, true);
+    const tx = await c.escrowCollateral(params, amount);
+    const backs = debtForCollateral(amount, params.strike);
+    output(
+      ctx.json,
+      { ...tx, amount, backsUnits: backs },
+      `escrowed ${formatAmount(amount, collateralDecimals)} into ${c.marketId(params)}: ${tx.hash}`,
+      // What the stake is FOR: the face a resting ask can now be filled for. Saying it here is what stops the
+      // next step being an offer larger than the escrow behind it.
+    );
+  },
+
+  "maker withdraw-escrow": async (ctx) => {
+    const { params, collateralDecimals } = await resolveMarket(ctx);
+    const amount = parseAmount(need(ctx.values.assets as string | undefined, "assets"), collateralDecimals);
+    const c = client(ctx, true);
+    const receiver = (typeof ctx.values.receiver === "string" ? ctx.values.receiver : c.account) as Address;
+    const tx = await c.withdrawCollateralEscrow(params, amount, receiver);
+    output(ctx.json, { ...tx, amount, receiver }, `withdrew ${formatAmount(amount, collateralDecimals)} of escrow to ${receiver}: ${tx.hash}`);
   },
 
   "maker withdraw-liquidity": async (ctx) => {

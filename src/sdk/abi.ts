@@ -10,6 +10,11 @@ export const coreV1Abi = parseAbi([
   "function tickToPrice(uint256 tick) pure returns (uint256)",
   "function fund(MarketParams params, uint256 assets)",
   "function withdrawLiquidity(MarketParams params, address lender, uint256 assets, address receiver)",
+  // The borrow side's mirror of fund/withdrawLiquidity: a borrower stakes collateral so it can REST an ask, and
+  // the core issues the debt against that escrow when a lender crosses. Without it the CLI can quote a resting
+  // borrow order but never place one, which leaves the whole maker-borrower half of the book out of reach.
+  "function escrowCollateral(MarketParams params, uint256 amount)",
+  "function withdrawCollateralEscrow(MarketParams params, address borrower, uint256 amount, address receiver)",
   "function fill(Offer offer, bytes ratifierData, uint256 units, address taker, address receiver) returns (uint256, uint256)",
   "function repay(MarketParams params, uint256 assets, address borrower) returns (uint256)",
   "function withdrawCollateral(MarketParams params, address borrower, address receiver) returns (uint256)",
@@ -36,6 +41,11 @@ export const coreV2Abi = parseAbi([
   "function tickToPrice(uint256 tick) pure returns (uint256)",
   "function fund(MarketParams params, uint256 assets)",
   "function withdrawLiquidity(MarketParams params, address lender, uint256 assets, address receiver)",
+  // The borrow side's mirror of fund/withdrawLiquidity: a borrower stakes collateral so it can REST an ask, and
+  // the core issues the debt against that escrow when a lender crosses. Without it the CLI can quote a resting
+  // borrow order but never place one, which leaves the whole maker-borrower half of the book out of reach.
+  "function escrowCollateral(MarketParams params, uint256 amount)",
+  "function withdrawCollateralEscrow(MarketParams params, address borrower, uint256 amount, address receiver)",
   "function fill(Offer offer, bytes ratifierData, uint256 units, address taker, address receiver) returns (uint256, uint256)",
   "function repay(MarketParams params, uint256 assets, address borrower) returns (uint256)",
   "function withdrawCollateral(MarketParams params, address borrower, address receiver) returns (uint256)",
