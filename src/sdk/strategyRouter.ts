@@ -65,14 +65,18 @@ export class StrategyRouterClient extends BiviumClient {
   /// The routers a market's gate admits, and whether it routes lenders. Asked of the GATE rather than taken from
   /// the profile, because a profile names one router and a deployment can run several gate generations at once —
   /// the fee rule changed by opening a new series, so the market decides which router it accepts, not the config.
-  /// A gate with no `LENDER_MUST_ROUTE` is the first generation, and that absence is the answer: it routes only
-  /// borrowers.
+  /// A failed/missing policy getter does not establish whether direct lender fills are permitted.
   async gateRouting(gate: Address): Promise<{ routers: Address[]; lenderMustRoute: boolean }> {
     const routers = [...(await this.pub.readContract({ address: gate, abi: gateAbi, functionName: "routers" }) as readonly Address[])];
-    let lenderMustRoute = false;
+    let lenderMustRoute: boolean;
     try {
       lenderMustRoute = await this.pub.readContract({ address: gate, abi: gateAbi, functionName: "LENDER_MUST_ROUTE" }) as boolean;
-    } catch { lenderMustRoute = false; }
+    } catch (cause) {
+      throw new Error(
+        `Cannot read LENDER_MUST_ROUTE from gate ${gate}; the gate may be unsupported or the RPC unavailable. Verify a compatible gate and RPC, then re-quote before executing; refusing to assume direct lender fill.`,
+        { cause },
+      );
+    }
     return { routers, lenderMustRoute };
   }
 

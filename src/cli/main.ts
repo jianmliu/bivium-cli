@@ -438,7 +438,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   return {
     client: c, legs: build.legs, deadline, grantExpiry, approvals,
     json: {
-      router, mode: "open", strategy: strategy.id, market: row.market.id, line,
+      router: c.router, mode: "open", strategy: strategy.id, market: row.market.id, line,
       asset: o.asset, numeraire: o.numeraire, deadline: deadline.toString(),
       derived: Object.fromEntries(Object.entries(build.derived).map(([k, x]) => [k, x.toString()])),
       swap: floor ? { minOut: floor.minOut.toString(), source: floor.source, estimate: floor.estimate.toString(), slippageBps: floor.slippageBps } : null,
@@ -447,6 +447,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     },
     human: [
       `${strategy.id} on ${row.collateralSymbol ?? params.collateralToken}/${row.loanSymbol ?? params.loanToken}: ${formatAmount(units, loanDecimals)} face`,
+      `  router ${c.router}`,
       file.offer.buy
         ? `  cost ${formatAmount(build.derived.cost, loanDecimals)}  fee ${formatAmount(build.derived.fee, loanDecimals)}  principal ${formatAmount(build.derived.principal, loanDecimals)}`
         : `  core cost ${formatAmount(build.derived.cost, loanDecimals)}  lender fee ${formatAmount(build.derived.fee, loanDecimals)}  total cost / approval ${formatAmount(build.derived.costWithFee, loanDecimals)}`,
