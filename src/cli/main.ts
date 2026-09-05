@@ -11,6 +11,7 @@ import {
   adapterFor,
   BiviumClient,
   assessMoneyness,
+  askBackingShortfall,
   discoverMarketsOnChain,
   fetchRelayerMarkets,
   principalForUnits,
@@ -441,7 +442,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   return {
     client: c, legs: build.legs, deadline, grantExpiry, approvals,
     json: {
-      router, mode: "open", strategy: strategy.id, market: row.market.id, line,
+      router: c.router, mode: "open", strategy: strategy.id, market: row.market.id, line,
       asset: o.asset, numeraire: o.numeraire, deadline: deadline.toString(),
       derived: Object.fromEntries(Object.entries(build.derived).map(([k, x]) => [k, x.toString()])),
       swap: floor ? { minOut: floor.minOut.toString(), source: floor.source, estimate: floor.estimate.toString(), slippageBps: floor.slippageBps } : null,
@@ -450,6 +451,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     },
     human: [
       `${strategy.id} on ${row.collateralSymbol ?? params.collateralToken}/${row.loanSymbol ?? params.loanToken}: ${formatAmount(units, loanDecimals)} face`,
+      `  router ${c.router}`,
       file.offer.buy
         ? `  cost ${formatAmount(build.derived.cost, loanDecimals)}  fee ${formatAmount(build.derived.fee, loanDecimals)}  principal ${formatAmount(build.derived.principal, loanDecimals)}`
         : `  core cost ${formatAmount(build.derived.cost, loanDecimals)}  lender fee ${formatAmount(build.derived.fee, loanDecimals)}  total cost / approval ${formatAmount(build.derived.costWithFee, loanDecimals)}`,
@@ -715,17 +717,36 @@ const { params, loanDecimals, collateralDecimals } = market;
   const ttl = BigInt(typeof ctx.values.ttl === "string" ? ctx.values.ttl : "604800");
   const account = accountFor(ctx);
   if (side === "sell") {
-    // A resting ask is issued out of the maker's collateral escrow, so an ask larger than the escrow behind it is
-    // an offer the core refuses at fill (`OnlyTakerMayBorrow`) and the relayer refuses at publish. Better to say
-    // so here, with the number, than to leave a signature on the book that nobody can take.
+    // Core transfers held credit first. Only the uncovered units create debt and need escrow;
+    // a fully credit-backed sale also works on older cores without the escrow getter, including after maturity.
     const c = client(ctx, false);
-    const escrow = await c.collateralEscrowOf(c.marketId(params), account.address as Address);
-    const backs = debtForCollateral(escrow, params.strike);
-    if (backs < maxUnits) {
-      fail(
-        `this ask offers ${formatAmount(maxUnits, loanDecimals)} face but the escrow behind it backs only `
-          + `${formatAmount(backs, loanDecimals)}. Stake more first: maker escrow --assets <collateral>`,
-      );
+    const marketId = c.marketId(params);
+    const credit = await c.creditOf(marketId, account.address as Address);
+    if (credit < maxUnits) {
+      const assertIssuanceOpen = () => {
+        if (BigInt(Math.floor(Date.now() / 1000)) >= params.maturity) {
+          fail("this ask exceeds held credit, but new issuance is closed at or after maturity. Reduce the order to held credit or acquire more credit to sell without adding debt.");
+        }
+      };
+      assertIssuanceOpen();
+      let escrow: bigint;
+      try {
+        escrow = await c.collateralEscrowOf(marketId, account.address as Address);
+      } catch (cause) {
+        throw new Error(
+          `Cannot read collateralEscrowOf from Core ${ctx.profile.core} for this ask's uncovered units; the Core may be unsupported or the RPC unavailable. Verify a compatible Core and RPC, then retry, or reduce the order to held credit; refusing to assume escrow backing.`,
+          { cause },
+        );
+      }
+      assertIssuanceOpen();
+      const shortfall = askBackingShortfall({ units: maxUnits, credit, escrow, strike: params.strike });
+      if (shortfall > 0n) {
+        fail(
+          `this ask offers ${formatAmount(maxUnits, loanDecimals)} face with ${formatAmount(credit, loanDecimals)} held credit; `
+            + `the newly issued units need ${formatAmount(shortfall, collateralDecimals)} more collateral than the available escrow. `
+            + "Reduce the order to held credit or acquire enough credit to cover it to avoid new debt. Collateral-backed issuance adds debt; funding more escrow is a separate explicit action.",
+        );
+      }
     }
   }
   const rat = resolveRatifierOr(ctx);
