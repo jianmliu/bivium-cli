@@ -49,3 +49,19 @@ Self-review: both confirmed defects are covered; original router selection and f
 - Minimal fixes: actual selected router in JSON/human output; cause-preserving fail-closed policy-read error.
 - After fixes: 14 focused tests and 185 full tests passed; typecheck and whitespace checks passed. Parent independently repeated the full suite and typecheck.
 - Independent requirements and final quality reviews passed, each repeating focused tests and typecheck. Quality review found no critical, important, or minor issues. PR integration remains the final gate.
+
+## Authorized follow-up: existing-credit sell orders
+
+Upstream PR #37 (`c553dec`) added an escrow-only precheck for every sell offer. The user authorized fixing its rejection of credit-backed secondary sells before continuing PR #35 integration.
+
+Files: `src/cli/main.ts` (maker offer precheck), `test/maker-offer.test.ts` (loopback CLI regressions). Reuse `askBackingShortfall` from `src/sdk/trade.ts`; do not change Core or existing router fixes.
+
+- [ ] Write and observe failing CLI tests for sufficient held credit with zero/unavailable escrow, both ABI lineages, and mixed credit plus escrow covering only newly issued units. Use a public synthetic test key and local RPC only, with temporary offer outputs; never load user keys or broadcast transactions.
+- [ ] Read credit first. If `credit >= maxUnits`, skip escrow completely. Otherwise refuse new issuance at/after maturity, and read escrow without a guessed-zero fallback. Missing getters/RPC failures stop with an actionable compatibility/read error.
+- [ ] Reuse exact Core rounding with `askBackingShortfall({ units: maxUnits, credit, escrow, strike: params.strike })`. Reject positive shortfall; state that reducing the order or acquiring credit avoids new debt, whereas escrow-backed issuance opens debt. Never automatically escrow, fund, or issue a write.
+- [ ] Cover one-unit collateral shortfall, pure escrow origination before maturity, insufficient credit/escrow, failed credit/escrow reads, maturity boundaries, and held-credit sell behavior at maturity. Keep ordinary buy behavior unchanged.
+- [ ] Run focused tests RED then GREEN, full suite and typecheck; obtain specification then quality review. Push reviewed fix, confirm current base and checks, and merge #35 with an exact head guard. Repeat tests on the actual merged result. New unrelated important upstream defects remain a stop condition, not implicit authority to expand scope.
+
+Follow-up evidence: 15 maker regression tests first produced 14 expected failures and one passing buy-path check. After the credit-first fix, all 15 maker tests and all 201 full-suite tests passed; typecheck passed. The parent repeated the full suite independently. Requirements review independently passed 29 maker/router focused tests and typecheck; no specification gaps were found.
+
+Final quality review also passed 29 focused tests, typecheck, and whitespace checks, with no remaining important or minor findings. The previously identified PR #37 integration blocker is closed; merge remains subject to current remote checks and head verification.
