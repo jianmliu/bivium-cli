@@ -83,3 +83,12 @@ test("package.json publishes the entry under ./strategies and ships the sources 
   const paths = new Set(packed[0].files.map((f) => f.path));
   for (const file of ALLOWED) assert.ok(paths.has(file), `${file} missing from the packed tarball`);
 });
+
+test('MCP production binaries, runtime dependencies and workflow reference are packaged', () => {
+  const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+  assert.equal(pkg.bin['bivium-mcp'], './bin/bivium-mcp.mjs');
+  assert.ok(pkg.dependencies.tsx && pkg.dependencies.ajv);
+  const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {cwd: ROOT, encoding: 'utf8'}));
+  const files = new Set(packed[0].files.map((f: {path:string}) => f.path));
+  for (const path of ['bin/bivium-mcp.mjs', 'src/mcp/tools/mm.ts', 'src/sdk/actions/orders.ts', 'skills/bivium/references/mcp.md']) assert.ok(files.has(path), path);
+});
