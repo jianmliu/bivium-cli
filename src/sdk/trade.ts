@@ -20,6 +20,8 @@ import { BiviumClient, type TxResult } from "./client.ts";
 import type { ChainDomain } from "./lineage.ts";
 import { marketParamsFromOffer } from "./offer.ts";
 import {
+  makerBackingKey,
+  type MakerBacking,
   fillCost,
   filterByLimitTick,
   offerCap,
@@ -106,12 +108,31 @@ export class TradeClient extends BiviumClient {
       seen.add(key);
       return true;
     });
-    const consumedValues = await Promise.all(
-      unique.map((e) => this.consumed(e.maker, e.offer.group).then((v): bigint | undefined => v, () => undefined)),
-    );
+    const consumedValues = await boundedMap(unique, (e) =>
+      this.consumed(e.maker, e.offer.group).then((v): bigint | undefined => v, () => undefined));
     const result = reconcileConsumedEntries(unique, consumedValues);
     if (!result.ready) throw new Error("could not read on-chain consumed for every offer — book unusable (fail closed)");
     return result.entries;
+  }
+
+  /** Authoritative maker backing, shared across every offer group in the same market. */
+  async loadBacking(entries: BookEntry[]): Promise<Map<string, MakerBacking>> {
+    const unique = new Map<string, BookEntry>();
+    for (const entry of entries) unique.set(makerBackingKey(entry), entry);
+    const values = await boundedMap([...unique], async ([key, entry]) => {
+      const id = this.marketId(marketParamsFromOffer(entry.offer));
+      try {
+        // Read both sides when a market/maker appears on both sides of a snapshot.
+        const related = entries.filter(e => makerBackingKey(e) === key);
+        const liquidity = related.some(e => e.offer.buy) ? await this.liquidityOf(id, entry.maker) : 0n;
+        const credit = related.some(e => !e.offer.buy) ? await this.creditOf(id, entry.maker) : 0n;
+        const escrow = related.some(e => !e.offer.buy) ? await this.collateralEscrowOf(id, entry.maker) : 0n;
+        return [key, { liquidity, credit, escrow }] as const;
+      } catch (error) {
+        throw new Error(`could not read maker backing for ${key} — fail closed`, { cause: error });
+      }
+    });
+    return new Map(values);
   }
 
   /** Plan a taker BUY (sweep the asks) sized by face units or by loan-token spend. */
@@ -120,16 +141,17 @@ export class TradeClient extends BiviumClient {
       throw new Error("size the buy with exactly one of units or spend");
     }
     const book = filterByLimitTick(sortSide(await this.reconcileBook(entries), "ask"), "ask", request.limitTick);
+    const backing = await this.loadBacking(book);
     let takes: SweepTake[];
     let totalUnits: bigint;
     let totalCost: bigint;
     if (request.units !== undefined) {
-      const plan = planSweepByFace(book, request.units);
+      const plan = planSweepByFace(book, request.units, backing);
       takes = plan.takes;
       totalUnits = plan.filled;
       totalCost = plan.cost;
     } else if (request.exactSpend) {
-      const quote = planExactSpend(book, request.spend!);
+      const quote = planExactSpend(book, request.spend!, backing);
       if (quote.kind !== "executable") {
         throw new Error(
           `exact spend not executable: book absorbs at most ${quote.maxAssets} (${quote.maxUnits} face) of requested ${quote.requestedAssets} — shortfall ${quote.shortfallAssets}`,
@@ -139,7 +161,7 @@ export class TradeClient extends BiviumClient {
       totalUnits = quote.plan.units;
       totalCost = quote.plan.cost;
     } else {
-      const plan = planSweepBySpend(book, request.spend!);
+      const plan = planSweepBySpend(book, request.spend!, backing);
       takes = plan.takes;
       totalUnits = plan.units;
       totalCost = plan.cost;
@@ -153,7 +175,8 @@ export class TradeClient extends BiviumClient {
       throw new Error("size the sell with units");
     }
     const book = filterByLimitTick(sortSide(await this.reconcileBook(entries), "bid"), "bid", request.limitTick);
-    const plan = planSweepByFace(book, request.units);
+    const backing = await this.loadBacking(book);
+    const plan = planSweepByFace(book, request.units, backing);
     return { side: "bid", takes: plan.takes, totalUnits: plan.filled, totalCost: plan.cost, worstTick: worstTickOf(plan.takes, "bid") };
   }
 
@@ -202,7 +225,7 @@ export class TradeClient extends BiviumClient {
       for (const [maker, units] of perMaker) {
         const credit = await this.creditOf(marketId, maker as Hex);
         if (credit >= units) continue;
-        const escrow = await this.collateralEscrowOf(marketId, maker as Hex).catch(() => 0n);
+        const escrow = await this.collateralEscrowOf(marketId, maker as Hex);
         const shortfall = askBackingShortfall({ units, credit, escrow, strike });
         if (shortfall > 0n) {
           throw new Error(
@@ -341,4 +364,11 @@ function worstTickOf(takes: SweepTake[], side: Side): bigint | undefined {
   const ticks = takes.map((t) => t.entry.offer.tick);
   // Buying asks: worst = priciest = highest tick. Selling into bids: worst = cheapest = lowest.
   return side === "ask" ? ticks.reduce((a, b) => (b > a ? b : a)) : ticks.reduce((a, b) => (b < a ? b : a));
+}
+
+/** Keep public RPC pressure bounded even for large relayer books. */
+async function boundedMap<T, R>(values: T[], fn: (value: T) => Promise<R>): Promise<R[]> {
+  const result: R[] = [];
+  for (let i = 0; i < values.length; i += 8) result.push(...await Promise.all(values.slice(i, i + 8).map(fn)));
+  return result;
 }
