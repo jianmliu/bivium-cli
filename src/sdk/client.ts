@@ -1,3 +1,4 @@
+import { basicCall } from "./actions/calls.ts";
 import {
   createPublicClient,
   createWalletClient,
@@ -281,18 +282,23 @@ export class BiviumClient {
     return (await this.pub.readContract({ address: setter, abi: setterRatifierAbi, functionName: "isRootRatified", args: [maker, root] } as never)) as boolean;
   }
 
+  private async writeBasic(params: MarketParams, action: Parameters<typeof basicCall>[3], assets: bigint, receiver: Address): Promise<TxResult> {
+    const call = basicCall(this.adapter, this.domain, params, action, this.account, receiver, assets);
+    return this.writeCore(call.functionName, call.args);
+  }
+
   async fund(params: MarketParams, assets: bigint): Promise<TxResult> {
     await this.approveExact(params.loanToken, this.profile.core, assets);
     const id = this.marketId(params);
     const before = await this.liquidityOf(id, this.account);
-    const tx = await this.writeCore("fund", [this.adapter.chainParams(this.domain, params), assets]);
+    const tx = await this.writeBasic(params, "fund", assets, this.account);
     const after = await this.liquidityOf(id, this.account);
     if (after - before !== assets) throw new Error("fund postcondition failed: liquidity delta != assets");
     return tx;
   }
 
   async withdrawLiquidity(params: MarketParams, assets: bigint, receiver: Address): Promise<TxResult> {
-    return await this.writeCore("withdrawLiquidity", [this.adapter.chainParams(this.domain, params), this.account, assets, receiver]);
+    return await this.writeBasic(params, "withdraw_liquidity", assets, receiver);
   }
 
   /// Stake collateral so a resting ASK can be backed: the mirror of `fund`, on the borrow side. The core issues
@@ -302,7 +308,7 @@ export class BiviumClient {
     await this.approveExact(params.collateralToken, this.profile.core, amount);
     const id = this.marketId(params);
     const before = await this.collateralEscrowOf(id, this.account);
-    const tx = await this.writeCore("escrowCollateral", [this.adapter.chainParams(this.domain, params), amount]);
+    const tx = await this.writeBasic(params, "escrow_collateral", amount, this.account);
     const after = await this.collateralEscrowOf(id, this.account);
     // The same postcondition `fund` carries: a token that moves less than it was told to would leave an offer
     // backed by an amount nobody checked.
@@ -313,7 +319,7 @@ export class BiviumClient {
   /// Take back escrow no fill has drawn on. Authorised the way withdrawLiquidity is — the core asks for
   /// `CAP_WITHDRAW_COLLATERAL` on the borrower, so an operator needs the grant and the owner never does.
   async withdrawCollateralEscrow(params: MarketParams, amount: bigint, receiver: Address): Promise<TxResult> {
-    return await this.writeCore("withdrawCollateralEscrow", [this.adapter.chainParams(this.domain, params), this.account, amount, receiver]);
+    return await this.writeBasic(params, "withdraw_collateral_escrow", amount, receiver);
   }
 
   /**
@@ -343,14 +349,14 @@ export class BiviumClient {
 
   async repay(params: MarketParams, assets: bigint): Promise<TxResult> {
     await this.approveExact(params.loanToken, this.profile.core, assets);
-    return await this.writeCore("repay", [this.adapter.chainParams(this.domain, params), assets, this.account]);
+    return await this.writeBasic(params, "repay", assets, this.account);
   }
 
   async withdrawCollateral(params: MarketParams, receiver?: Address): Promise<TxResult> {
-    return await this.writeCore("withdrawCollateral", [this.adapter.chainParams(this.domain, params), this.account, receiver ?? this.account]);
+    return await this.writeBasic(params, "withdraw_collateral", 0n, receiver ?? this.account);
   }
 
   async claim(params: MarketParams, units: bigint, receiver?: Address): Promise<TxResult> {
-    return await this.writeCore("claim", [this.adapter.chainParams(this.domain, params), units, this.account, receiver ?? this.account]);
+    return await this.writeBasic(params, "claim", units, receiver ?? this.account);
   }
 }
