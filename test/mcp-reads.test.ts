@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { adapterFor } from "../src/sdk/lineage.ts";
 import { ZERO_ADDRESS, type DeploymentProfile, type MarketParams } from "../src/sdk/types.ts";
 import { ActionContext, type ActionRpc } from "../src/sdk/actions/context.ts";
-import { accountSnapshot, marketDetails, transactionStatus } from "../src/sdk/actions/reads.ts";
+import { accountSnapshot, marketDetails, transactionStatus, bookSnapshot } from "../src/sdk/actions/reads.ts";
+import { entryFromSignedOffer } from "../src/sdk/orderbook.ts";
 import { createStrategyMcp } from "../src/mcp/server.ts";
 import { discoverMarketsOnChain } from "../src/sdk/discovery.ts";
 
@@ -146,4 +147,33 @@ test("real RPC transport enforces upstream timeout even with a parent signal", a
     assert.ok(Date.now() - start < 500, "upstream deadline must not wait for parent abort");
     assert.equal(parent.signal.aborted, false);
   } finally { clearTimeout(fallback); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+test("book snapshot budgets shared groups and never equates capacity with exact fill simulation", async () => {
+  const { context } = fixture();
+  const offer = { ...params, maker: address(6), buy: false, tick: 4096n, maxUnits: 250n, maxAssets: 0n, start: 0n, expiry: 1900n, group: hash, ratifier: profile.signatureRatifier };
+  const entries = [offer, { ...offer, expiry: 1901n }].map((o) => entryFromSignedOffer(o, adapter.offerCommitment(profile, o), "0x"));
+  context.options.book = async () => ({ entries, source: "fixture", coverage: "complete" });
+  const oldRead = context.rpc.readContract;
+  context.rpc.readContract = async (r) => r.functionName === "creditOf" ? 1000n : r.functionName === "consumed" ? 100n : oldRead(r);
+  const response = await bookSnapshot(context, market.id, { side: "ask" });
+  assert.equal(response.data.rawAdvertisedDepth[0].cumulative, 500n);
+  assert.equal(response.data.conservativeCapacityDepth[0].cumulative, 150n);
+  assert.equal(response.data.executableDepth, null);
+  assert.equal(response.snapshot!.coverage, "partial");
+  const conflicting = { ...offer, buy: true, maxUnits: 0n, maxAssets: 250n };
+  entries.push(entryFromSignedOffer(conflicting, adapter.offerCommitment(profile, conflicting), "0x"));
+  await assert.rejects(bookSnapshot(context, market.id, { side: "ask", limit: 1 }), /mixed cap/);
+  await assert.rejects(bookSnapshot(context, market.id, { limit: 1 }), /mixed cap/);
+});
+test("cached books are reconstructed and filtered at the pinned timestamp", async () => {
+  const { context } = fixture();
+  const o = { ...params, maker: address(6), buy: false, tick: 4096n, maxUnits: 250n, maxAssets: 0n, start: 0n, expiry: 900n, group: hash, ratifier: profile.signatureRatifier };
+  let entries = [entryFromSignedOffer(o, adapter.offerCommitment(profile, o), "0x")];
+  context.options.book = async () => ({ entries, source: "cache" });
+  assert.equal((await bookSnapshot(context, market.id)).data.conservativeCapacityDepth.length, 0);
+  const live = { ...o, expiry: 1900n };
+  entries = [{ ...entryFromSignedOffer(live, adapter.offerCommitment(profile, live), "0x"), maker: address(9), price: 1n }];
+  const snapshot = await bookSnapshot(context, market.id);
+  assert.equal(snapshot.data.entries[0].maker, o.maker);
+  assert.notEqual(snapshot.data.entries[0].price, 1n);
 });

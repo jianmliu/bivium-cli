@@ -4,6 +4,12 @@ import * as book from '../src/sdk/orderbook.ts';
 import { WAD, STRIKE_SCALE, type Offer, type Hex } from '../src/sdk/types.ts';
 const base = { loanToken:'0xa', collateralToken:'0xb', maturity:1800000000n, strike:STRIKE_SCALE, allowPartialRepay:false, gate:'0x0', maker:'0xc', buy:false, tick:4096n, maxUnits:250n, maxAssets:0n, start:0n, expiry:1790000000n, group:'0x1', ratifier:'0xd' } as Offer;
 const entry = (id:number, patch:Partial<Offer> = {}) => ({...book.entryFromSignedOffer({...base,...patch}, `0x${id}` as Hex,'0x'),price:WAD});
+test('exact spend labels arithmetic-only capacity without maker backing',()=>{
+ const quote=book.planExactSpend([entry(1)],100n);
+ if(quote.kind!=='executable')assert.fail('expected exact arithmetic depth');
+ assert.equal(quote.backingVerified,false);
+ assert.equal(quote.executionValidated,false);
+});
 test('shared group consumes only its cap and preserves exact consumed metadata',()=>{
  const entries=[entry(1),entry(2)];
  assert.equal(book.planSweepByFace(entries,500n).filled,250n);

@@ -2,6 +2,7 @@ import { createPublicClient, http } from "viem";
 import { adapterFor } from "../lineage.ts";
 import { fetchRelayerMarkets, type DiscoveredMarket } from "../discovery.ts";
 import { ZERO_ADDRESS, type Address, type DeploymentProfile, type Hex, type MarketParams } from "../types.ts";
+import type { BookEntry } from "../orderbook.ts";
 import { ActionError, type Snapshot } from "./types.ts";
 
 export type ContractRead = { address: Address; abi: readonly unknown[]; functionName: string; args?: readonly unknown[]; blockNumber?: bigint; account?: Address };
@@ -22,6 +23,7 @@ export interface ActionContextOptions {
   now?: () => number;
   /** Host-side test/runtime budget; no tool argument can raise this deadline. */
   rpcTimeoutMs?: number;
+  book?: (params: MarketParams, signal?: AbortSignal) => Promise<{ entries: BookEntry[]; source: string; observedAt?: string; coverage?: "complete" | "partial" | "unknown" }>;
 }
 export type ReadContext = {
   chainId: number; core: Address; account: Address;

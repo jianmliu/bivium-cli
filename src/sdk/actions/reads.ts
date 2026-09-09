@@ -1,7 +1,9 @@
 import { parseAbi } from "viem";
 import { erc20Abi } from "../abi.ts";
 import { formatAmount } from "../math.ts";
-import { offerCap, remainingFace, fillCost } from "../orderbook.ts";
+import { offerCap, remainingFace, fillCost, sortSide, aggregateLevels, reconcileConsumedEntries, planSweepByFace, makerBackingKey, validateGroups, entryFromSignedOffer, type MakerBacking, type Side } from "../orderbook.ts";
+import { fetchRelayerBook } from "../relayer.ts";
+import { canonicalHash } from "./preview.ts";
 import { tickToPrice } from "../tick.ts";
 import { marketParamsFromOffer } from "../offer.ts";
 import { RATIFIED } from "../ratify.ts";
@@ -126,4 +128,50 @@ export async function transactionStatus(service: ActionContext, txHash: Hex, sig
     } catch (error) { if (!(error instanceof Error) || error.name !== "TransactionNotFoundError") throw upstream(error); }
   }
   return result({ txHash, status, confirmations, receiptBlock, source: "rpc_receipt_lookup", observedAt: new Date(service.now()).toISOString(), confirmationsAsOfBlock: String(ctx.blockNumber), indexerStatus: "unknown" as const }, { ...ctx.snapshot, coverage: "partial", omitted: ["receipt lookup is independently observed, not pinned to snapshot", "indexer synchronization"] });
+}
+export async function bookSnapshot(service: ActionContext, marketId: Hex, options: { side?: Side; limit?: number; cursor?: string } = {}, signal?: AbortSignal) {
+  const ctx = await service.pin(ZERO_ADDRESS, signal);
+  const market = await service.market(marketId, signal);
+  const limit = options.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new ActionError("INVALID_ARGUMENT", "Book limit must be 1–100");
+  const load = service.options.book ?? (async (params, signal) => {
+    if (!service.profile.relayerUrl) throw new ActionError("UPSTREAM_UNAVAILABLE", "No orderbook source configured");
+    const ratifiers = [...new Set([service.profile.signatureRatifier, service.profile.setterRatifier].filter((r): r is Address => !!r))];
+    const books = await Promise.all(ratifiers.map((ratifier) => fetchRelayerBook({ ...service.profile, relayerUrl: service.profile.relayerUrl!, ratifier }, params, { nowSec: ctx.timestamp, signal })));
+    if (books.some((b) => !b.ok)) throw new ActionError("UPSTREAM_UNAVAILABLE", "At least one ratifier book is unavailable", true);
+    return { entries: books.flatMap((b) => b.ok ? b.entries : []), source: service.profile.relayerUrl!, observedAt: new Date(service.now()).toISOString(), coverage: "unknown" as const };
+  });
+  const loaded = await load(market.params, signal);
+  const unique = new Map<string, typeof loaded.entries[number]>();
+  for (const entry of loaded.entries) {
+    if (service.adapter.computeMarketId(service.profile, marketParamsFromOffer(entry.offer)).toLowerCase() !== marketId.toLowerCase() || service.adapter.offerCommitment(service.profile, entry.offer).toLowerCase() !== entry.commitment.toLowerCase()) throw new ActionError("DOMAIN_MISMATCH", "Book entry identity mismatch");
+    unique.set(entry.commitment.toLowerCase(), entryFromSignedOffer(entry.offer, entry.commitment, entry.signature));
+  }
+  validateGroups([...unique.values()]);
+  const active = [...unique.values()].filter((entry) => entry.offer.start <= ctx.timestamp && ctx.timestamp <= entry.offer.expiry);
+  const sorted = [...sortSide(active, "bid"), ...sortSide(active, "ask")].filter((e) => !options.side || e.side === options.side);
+  const binding = canonicalHash([service.profile.chainId, service.profile.core.toLowerCase(), marketId.toLowerCase(), options.side, sorted.map((e) => e.commitment)]);
+  let offset = 0;
+  if (options.cursor) {
+    const [previous, rawOffset] = options.cursor.split(":");
+    offset = Number(rawOffset);
+    if (previous !== binding || !Number.isSafeInteger(offset) || offset < 0) throw new ActionError("INVALID_ARGUMENT", "Book cursor does not match current collection");
+  }
+  // Cap RPC work independently of untrusted relayer collection size; one page is not whole-account depth.
+  const page = sorted.slice(offset, offset + limit);
+  const consumed = await Promise.all(page.map((e) => service.core<bigint>(ctx, "consumed", [e.maker, e.offer.group])));
+  const reconciled = reconcileConsumedEntries(page, consumed);
+  if (!reconciled.ready) throw new ActionError("UPSTREAM_UNAVAILABLE", "Missing consumed data; no execution capacity available", true);
+  const backing = new Map<string, MakerBacking>();
+  for (const entry of reconciled.entries) {
+    const key = makerBackingKey(entry);
+    if (backing.has(key)) continue;
+    const [liquidity, credit, escrow] = await Promise.all([service.core<bigint>(ctx, "liquidityOf", [marketId, entry.maker]), service.core<bigint>(ctx, "creditOf", [marketId, entry.maker]), service.core<bigint>(ctx, "collateralEscrowOf", [marketId, entry.maker])]);
+    backing.set(key, { liquidity, credit, escrow: ctx.timestamp < market.params.maturity ? escrow : 0n });
+  }
+  const capacity = ["bid", "ask"].flatMap((side) => {
+    const entries = sortSide(reconciled.entries, side as Side);
+    return planSweepByFace(entries, entries.reduce((sum, entry) => sum + entry.size, 0n), backing).takes.map((t) => ({ ...t.entry, size: t.units }));
+  });
+  return result({ marketId, entries: page, nextCursor: offset + limit < sorted.length ? `${binding}:${offset + limit}` : null, rawAdvertisedDepth: ["bid", "ask"].flatMap((side) => aggregateLevels(sortSide(page, side as Side)).map((level) => ({ ...level, side }))), conservativeCapacityDepth: ["bid", "ask"].flatMap((side) => aggregateLevels(sortSide(capacity, side as Side)).map((level) => ({ ...level, side }))), executableDepth: null, source: loaded.source, sourceObservedAt: loaded.observedAt ?? null, sourceCoverage: loaded.coverage ?? "unknown" }, { ...ctx.snapshot, coverage: "partial", omitted: ["exact taker, ratifier and gate simulation", "orders outside returned page and signatures absent from relayer"] }, [{ code: "CAPACITY_ONLY", severity: "warning", message: "Capacity is bounded by consumed and maker backing, but exact fills still need signature/gate verification and simulation. Side scenarios are alternatives, not simultaneous reservations." }]);
 }

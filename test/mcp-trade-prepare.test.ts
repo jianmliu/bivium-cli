@@ -6,7 +6,7 @@ import { entryFromSignedOffer, fillCost } from '../src/sdk/orderbook.ts';
 import { RATIFIED } from '../src/sdk/ratify.ts';
 import type { Address, DeploymentProfile, Hex, Offer } from '../src/sdk/types.ts';
 const a=(n:number)=>`0x${n.toString(16).padStart(40,'0')}` as Address;
-const profile:DeploymentProfile={name:'test',abiProfile:'core-v2',chainId:46630,core:a(1),signatureRatifier:a(2),rpcUrl:'http://127.0.0.1:1'};
+const profile:DeploymentProfile={name:'test',abiProfile:'core-v2',chainId:46630,core:a(1),signatureRatifier:a(2),strategyRouter:a(8),rpcUrl:'http://127.0.0.1:1'};
 const o:Offer={loanToken:a(3),collateralToken:a(4),maturity:1000n,strike:10n**36n,allowPartialRepay:true,gate:a(0),maker:a(5),buy:false,tick:4000n,maxUnits:1000n,maxAssets:0n,start:0n,expiry:900n,group:`0x${'00'.repeat(32)}`,ratifier:a(2)};
 const adapter=adapterFor('core-v2');
 function plan(offer=o,units=20n){const entry=entryFromSignedOffer(offer,adapter.offerCommitment(profile,offer),'0x');return {side:entry.side,takes:[{entry,units}],totalUnits:units,totalCost:fillCost(offer,units,entry.price)};}
@@ -32,3 +32,9 @@ test('matured secondary sell encodes bids and preserves no-new-debt contract gua
 test('semantic lend strategy builds bound router program',async()=>{const f=fixture({BIVIUM:profile.core,MAX_LEGS:16n,LENDER_FEE_BPS:0n});f.intent={...f.intent,action:'strategy_program',strategyId:'lendAsset',router:a(8)};const r=await evaluateAction(f.context,f.intent,await f.context.pin(f.intent.account));const decoded=decodeFunctionData({abi:(await import('../src/sdk/strategyRouter.ts')).routerAbi,data:r.transaction.data});assert.equal(decoded.functionName,'execute');assert.equal((decoded.args![0] as any)[0].kind,1);assert.equal(decoded.args![1],200n);});
 test('semantic borrowing strategy verifies pool pair and requires explicit swap minimum',async()=>{const f=fixture({creditOf:0n,BIVIUM:profile.core,MAX_LEGS:16n,FEE_BPS:0n,grantOf:[4n,300n],position:{debt:0n,collateral:0n,collateralWithdrawable:0n}});const offer={...o,buy:true};f.intent={...f.intent,action:'strategy_program',maxCost:undefined,strategyId:'short',router:a(8),minProceeds:'0',maxTopUp:'20',fills:[{offer,commitment:adapter.offerCommitment(profile,offer),ratifierData:'0x',units:'20'}]};const ctx=await f.context.pin(f.intent.account);await assert.rejects(evaluateAction(f.context,f.intent,ctx),/minOut/);f.intent.minOut='1';f.intent.poolKey={currency0:a(3),currency1:a(9),fee:3000,tickSpacing:60,hooks:a(0)};await assert.rejects(evaluateAction(f.context,f.intent,ctx),/Pool key/);});
 test('unused economic bounds are rejected by SDK evaluator itself',async()=>{const f=fixture();const ctx=await f.context.pin(f.intent.account);await assert.rejects(evaluateAction(f.context,{...f.intent,minProceeds:'1'},ctx),/minProceeds/);await assert.rejects(evaluateAction(f.context,{...f.intent,amount:'1'},ctx),/amount/);});
+test('ungated arbitrary router cannot obtain approval by self-reporting expected Core',async()=>{
+ const f=fixture({BIVIUM:profile.core,MAX_LEGS:16n,LENDER_FEE_BPS:0n,allowance:0n});
+ f.intent.router=a(9);
+ await assert.rejects(evaluateAction(f.context,f.intent,await f.context.pin(f.intent.account)),/trusted|configured/i);
+ assert.equal(f.calls.some(c=>c.simulation),false);
+});

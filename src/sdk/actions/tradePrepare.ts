@@ -32,6 +32,7 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
  const keyState:Record<string,unknown>={params:p,deadline,matured:ctx.timestamp>=p.maturity};
  const read=async<T>(address:Address,abi:readonly unknown[],name:string,args:readonly unknown[]=[]):Promise<T>=>{const v=await context.read<T>(ctx,address,abi,name,args);keyState[`${address}:${name}:${args.map(String).join(':')}`]=v;return v;};
  let router=intent.router??(borrowing||strategy?context.profile.strategyRouter:undefined);
+ if(p.gate.toLowerCase()===ZERO_ADDRESS&&router&&router.toLowerCase()!==context.profile.strategyRouter?.toLowerCase())throw new ActionError('UNSUPPORTED_ACTION','Ungated router must match the trusted host-configured strategyRouter');
  if(p.gate.toLowerCase()!==ZERO_ADDRESS){
   const routers=await read<Address[]>(p.gate,gateAbi,'routers');
   const lenderMustRoute=await read<boolean>(p.gate,gateAbi,'LENDER_MUST_ROUTE');

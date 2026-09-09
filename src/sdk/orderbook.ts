@@ -131,7 +131,7 @@ export function makerBackingKey(entry: BookEntry): string {
 }
 const groupKey = (e: BookEntry) => `${e.offer.maker}:${e.offer.group}`.toLowerCase();
 
-function validateGroups(entries: BookEntry[]): void {
+export function validateGroups(entries: BookEntry[]): void {
   const groups = new Map<string, { assets: boolean; consumed: bigint }>();
   for (const e of entries) {
     const key = groupKey(e);
@@ -204,7 +204,7 @@ export function planSweepBySpend(sorted: BookEntry[], spend: bigint, backing?: B
 }
 
 export type ExactSpendQuote =
-  | { kind: "executable"; requestedAssets: bigint; plan: ReturnType<typeof planSweepBySpend>; levelCount: number }
+  | { kind: "executable"; requestedAssets: bigint; plan: ReturnType<typeof planSweepBySpend>; levelCount: number; backingVerified: boolean; executionValidated: false }
   | {
       kind: "insufficient-depth";
       requestedAssets: bigint;
@@ -217,6 +217,8 @@ export type ExactSpendQuote =
 /**
  * Exact-spend quote: executable only when the book absorbs EXACTLY `requestedAssets` (no partial
  * spend, no rounding remainder). Anything else reports the achievable maximum instead.
+ * Legacy `executable` denotes exact arithmetic depth only. Without backing it is group-only;
+ * even with backing, signature/gate/taker validation and simulation remain necessary.
  */
 export function planExactSpend(sorted: BookEntry[], requestedAssets: bigint, backing?: Backing): ExactSpendQuote {
   if (requestedAssets <= 0n) {
@@ -225,7 +227,7 @@ export function planExactSpend(sorted: BookEntry[], requestedAssets: bigint, bac
   const plan = planSweepBySpend(sorted, requestedAssets, backing);
   const levelCount = new Set(plan.takes.map((take) => take.entry.price)).size;
   if (plan.takes.length > 0 && plan.cost === requestedAssets) {
-    return { kind: "executable", requestedAssets, plan, levelCount };
+    return { kind: "executable", requestedAssets, plan, levelCount, backingVerified: backing !== undefined, executionValidated: false };
   }
   return {
     kind: "insufficient-depth",

@@ -5,15 +5,22 @@
 // thing hermetically testable. Ajv validates each advertised Draft 7 schema before dispatch.
 // Transport framing is bounded before decoding or accumulating a complete request.
 //
-// Scope is READ-ONLY on purpose: list the catalog, list markets, quote, plan. Nothing here signs
-// or sends — execution stays with the CLI (`borrow execute`, `trade buy`, …) under the user's key,
-// which is the "preview and execute are separate calls" rule from the design note.
+// No chain signing or broadcasting. Optional relayer writes require explicit startup configuration.
 import type { Readable, Writable } from "node:stream";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { ActionError } from "../sdk/actions/types.ts";
 import { ActionContext } from "../sdk/actions/context.ts";
 import { createReadTools, READ_TOOL_SPECS } from "./tools/reads.ts";
+import { createActionTools, ACTION_TOOL_SPECS, loadPolicies } from "./tools/actions.ts";
+import { ActionService } from "../sdk/actions/preview.ts";
+import { OrderService } from "../sdk/actions/orders.ts";
+import { PublishJournal } from "../sdk/actions/orderJournal.ts";
+import { createOrderTools, ORDER_TOOL_SPECS } from "./tools/orders.ts";
+import { resolve, join } from "node:path";
+import { homedir } from "node:os";
+import type { ConfiguredRiskPolicy } from "../sdk/actions/marketAnalysis.ts";
+import { createMarketAnalysisTools, MM_TOOL_SPECS } from "./tools/mm.ts";
 import { addressSchema, tokenSchema, decimalAmountSchema, integerStringSchema, integerSchema, positiveIntegerSchema } from "./schema.ts";
 import { ToolRegistry, READ_ONLY_ANNOTATIONS, type ToolDef, type ToolDefinition } from "./registry.ts";
 import { toolContent, toolFailure } from "./result.ts";
@@ -58,6 +65,11 @@ export interface McpDeps {
   profile: DeploymentProfile;
   client?: BiviumClient;
   actionContext?: ActionContext;
+  actionService?: ActionService;
+  policies?: { [id: string]: ConfiguredRiskPolicy };
+  orderService?: OrderService;
+  journal?: PublishJournal;
+  allowRelayerWrites?: boolean;
   /** Pre-fetched rows / spot / book — tests, or a host that already holds them. */
   overrides?: { rows?: PoolRow[]; spot?: SpotRef; book?: BookLoader; parity?: HttpQuoteLoader | false; positions?: (taker: string) => Promise<HttpPositionsResult> };
   now?: () => bigint;
@@ -118,7 +130,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
     inputSchema: { type: "object", properties: { taker: { ...addressSchema, description: "the account address" } }, required: ["taker"], additionalProperties: false },
   },
 ].map(tool => ({...tool, annotations: READ_ONLY_ANNOTATIONS}));
-export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS];
+export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS, ...ACTION_TOOL_SPECS, ...ORDER_TOOL_SPECS, ...MM_TOOL_SPECS];
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
@@ -225,7 +237,7 @@ export function createStrategyMcp(deps: McpDeps) {
           minOut: str(args.minOut),
           ttlSeconds: big(args.ttlSeconds, "ttlSeconds"),
         });
-        return { ...gatheredToJson(g), plan };
+        return { ...gatheredToJson(g), plan: { ...plan, executable: false } };
       }
       case "strategy_positions": {
         const taker = str(args.taker);
@@ -241,7 +253,12 @@ export function createStrategyMcp(deps: McpDeps) {
 
   const actionContext = deps.actionContext ?? new ActionContext({ profile, markets: deps.overrides?.rows ? async () => deps.overrides!.rows!.map((r) => r.market) : undefined });
   const registry = new ToolRegistry(LEGACY_TOOLS.map(tool => ({...tool, concurrency: tool.name === "strategy_list" ? "local" : "bounded", timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})));
-  for (const tool of createReadTools(actionContext)) registry.register({...tool, concurrency: tool.name === "server_info" ? "local" : "managed"});
+  for (const tool of createReadTools(actionContext, { relayerWrites: deps.allowRelayerWrites ?? false, policyIds: Object.keys(deps.actionService?.policies ?? deps.policies ?? {}), tools: TOOLS.map(t => t.name) })) registry.register({...tool, concurrency: tool.name === "server_info" ? "local" : "managed"});
+  const actionService = deps.actionService ?? new ActionService(actionContext, deps.policies ?? {});
+  for (const tool of createActionTools(actionService)) registry.register(tool);
+  const orderService = deps.orderService ?? new OrderService(actionContext, actionService, { journal: deps.journal, allowRelayerWrites: deps.allowRelayerWrites });
+  for (const tool of createOrderTools(orderService)) registry.register(tool);
+  for (const tool of createMarketAnalysisTools(actionContext, deps.actionService?.policies ?? deps.policies ?? {}, orderService.journal)) registry.register(tool);
   for (const tool of deps.tools ?? []) registry.register(tool);
   const callTool = (name: string, args: unknown) => registry.call(name,args);
 
@@ -341,7 +358,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
   const profile = loadProfile(profilePath);
-  await serveStdio({ profile, client: new BiviumClient(profile) });
+  const policyIndex = argv.indexOf("--policy-file");
+  const policies = policyIndex >= 0 ? loadPolicies(argv[policyIndex + 1]) : {};
+  const journalIndex = argv.indexOf("--journal-dir");
+  const journalPath = journalIndex >= 0 ? argv[journalIndex + 1] : join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "bivium", "mcp", `${profile.chainId}-${profile.core.toLowerCase()}`);
+  if (!journalPath) throw new Error("--journal-dir requires a path");
+  const journal = new PublishJournal(resolve(journalPath));
+  try { await serveStdio({ profile, client: new BiviumClient(profile), policies, journal, allowRelayerWrites: argv.includes("--allow-relayer-writes") }); }
+  finally { journal.close(); }
 }
 
 if (process.argv[1] && /server\.(ts|js|mjs)$/.test(process.argv[1])) {

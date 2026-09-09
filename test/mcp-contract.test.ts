@@ -26,7 +26,7 @@ for (const name of ['strategy_quote','strategy_plan']) {
  });
 }
 test('addresses are validated before loading', async () => { await failure('strategy_positions',{taker:'0x123'}); await failure('strategy_plan',{...valid.strategy_plan,router:'bad'}); });
-test('all advertised tools explicitly describe safe read-only behavior', () => { for (const tool of TOOLS) assert.deepEqual((tool as any).annotations,{readOnlyHint:true,destructiveHint:false,idempotentHint:true}); });
+test('legacy tools retain their read-only annotations', () => { for (const tool of TOOLS.filter(t => Object.hasOwn(valid,t.name))) assert.deepEqual((tool as any).annotations,{readOnlyHint:true,destructiveHint:false,idempotentHint:true}); });
 
 import {validator, decimalAmountSchema, listLimitSchema, listLimit, marketArraySchema} from '../src/mcp/schema.ts';
 import {ToolRegistry,createConcurrencyLimiter,withDeadline} from '../src/mcp/registry.ts';
