@@ -25,3 +25,4 @@ export * from "./actions/orderJournal.ts";
 export * from "./actions/marketAnalysis.ts";
 export * from "./marketMaking.ts";
 export * from "./arbitrage.ts";
+export * from "./settler.ts";

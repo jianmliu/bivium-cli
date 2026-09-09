@@ -21,7 +21,7 @@ or sell is **not consent to dual-currency yield**: clarify that product distinct
 Lead with a short decision summary; retain the full verification payload and all material risks
 before any signature. The execution and risk-policy gates below remain mandatory.
 
-For requests to run, authorize, inspect or stop a market maker (MM) or settlement keeper, read
+For requests to run, authorize, inspect, stop or reconcile a market maker (MM) or settlement keeper, read
 [the operator guide](references/operators.md) instead of forcing the goal into a consumer strategy.
 These are separate operational roles; they do not add or rename strategy catalog IDs. Ordinary
 trades retain per-transaction approval. Automatic signatures are permitted only inside a separately
@@ -440,6 +440,9 @@ compared (`skipped` for off-book pricing or multi-level sweeps, `unavailable` wh
 This section is the borrower opt-in and single-transaction reference. To operate a keeper for
 others continuously, use the operator guide: do not mistake `settle arm` for keeper startup,
 and do not use the wallet-advance example below for a no-principal-advance session.
+Manual `--via-jit-bounded` is a separately authorized single transaction,
+not automation or budget approval. New keeper sessions require the operator guide's v2 policy
+and reviewed bounded wrapper; legacy JIT/Morpho examples below do not satisfy those bounds.
 
 On Bivium, doing nothing at maturity IS exercise: repay is blocked from maturity on and the
 collateral goes to the credit holders — which punishes exactly the borrower who judged the market

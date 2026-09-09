@@ -1,6 +1,6 @@
 # MM and keeper operator sessions
 
-Read this guide when the user wants to run, authorize, inspect or stop market making or a
+Read this guide when the user wants to run, authorize, inspect, stop or reconcile market making or a
 maturity-settlement keeper. These are operational roles, not new consumer strategy IDs.
 
 ## Capability first; no silent activation
@@ -8,8 +8,23 @@ maturity-settlement keeper. These are operational roles, not new consumer strate
 The bounded executor lives in the companion `bivium-mm` repository, using its local `session`
 entry. Check the installed revision, its `docs/agent-sessions.md`, and `capabilities` before
 promising automatic operation. If the entry, role, persistent limits or stop capability is
-missing, offer a read-only plan or ordinary individually signed actions; do not substitute
+missing, offer a read-only plan; do not substitute
 legacy `POST /run`, a wrapper around unrestricted commands, or a prompt-only budget.
+
+MM keeps policy version 1 unchanged. New keeper execution requires policy version 2 and the
+JIT-only `settleWithFlashBounded` entrypoint on a reviewed new wrapper address with a pinned
+runtime bytecode hash (`keeper.wrapper.address` / `codeHash`). An old wrapper plus prompt budgets
+or extra policy fields cannot enforce these bounds. Missing wrapper, pin, policy fields, evidence
+or route means no execution: no wallet, Morpho, legacy JIT or shared Worker fallback.
+
+Legacy keeper version 1 permits only `status`, `stop` and keyless `reconcile`; it cannot be
+newly approved, previewed for execution, run or signed, even if its key is available. Migration
+requires a fresh dedicated account, new policy and explicit approval. Never change a policy's
+version in place, reuse the old account, delete its binding or reset its history/budgets.
+Existing standalone/Worker keeper routes remain legacy, not automatically migrated.
+
+Manual CLI `--via-jit-bounded` is a separately authorized single transaction,
+not automation or budget approval. Do not use it to bypass a missing session prerequisite.
 
 The legacy Worker combines quoting, taker, self-arm and keeper; `MM_ENABLED` does not stop all
 of them. The separate `bivium-keeper` repository is a different vault/BTC workflow, not this
@@ -33,6 +48,7 @@ data and present them for confirmation.
 Never silently enable taking orders, opening debt, self-arming, auto-funding, minting, borrowing
 to seed inventory, rolling positions or expanding to new markets. No ask inventory means
 one-sided MM or waiting, not permission to manufacture inventory.
+Sessions last at most 24 hours, with no automatic funding, top-up or renewal.
 
 ## Risk acceptance and run authorization are different
 
@@ -56,8 +72,10 @@ to bypass an exhausted budget.
 
 The operator account is a dedicated EOA controlled by the user. Its secret can sign arbitrary
 transactions if stolen: the executor's limits are software checks, not onchain session-key
-restrictions. Use separate MM and keeper accounts, never the main wallet or official quoting
-key. The user provisions the private key file in their own host; pass its path to the executor
+restrictions. The bounded entrypoint enforces its four transaction bounds onchain; it does not
+restrict a compromised EOA key from making other calls. Use separate MM and keeper accounts,
+never the main wallet or official quoting key. The user provisions the private key file in their
+own host; pass its path to the executor
 without opening, printing or copying its contents into the conversation. Do not assume access
 to a key because a user approved the policy.
 
@@ -99,7 +117,23 @@ Running an authorized operator is not the same as asking Codex to send a future 
 ```bash
 npm run session -- status --state-dir "$STATE_DIR"
 npm run session -- stop --state-dir "$STATE_DIR"
+npm run session -- reconcile --state-dir "$STATE_DIR"
 ```
+
+`status` reports last-known local state; it is not network reconciliation. `stop` persists stop
+intent locally without RPC. For pending receipts/accounting, including after stop or expiry,
+use keyless `reconcile`: it accepts no key option, persists stopped/expired status before network
+reads, and reads receipts/consumption and saves accounting only. It never signs, publishes,
+broadcasts, resumes, reapproves or resets. Success, revert and RPC failure preserve terminal
+stop/expiry. Missing, unfinalized or uncertain receipts keep pending maximum Gas reserved;
+do not restart, load a key or clear history to recover accounting. An intact ledger and exclusive
+account lock are still required; reconciliation does not repair corruption by discarding state.
+
+Recovery verifies chain-matched canonical receipts covered by the RPC-reported finalized head,
+not just elapsed blocks. Legacy v1 `FlashSettled` receipts remain recoverable without the new
+event. Successful v2 receipts additionally require matching `BoundedFlashSettled`, bounded debt,
+consumed plus leftover collateral equal to the ask, and reported final wallet balances within
+caps and covering payouts. Report gross token profit separately from actual native Gas spent.
 
 Read real results: approved is not running, broadcast is not settled, paused is not recovered.
 Never claim a running strategy from a successful installation, saved policy or process spawn
@@ -124,14 +158,46 @@ expired or unfilled offers. Report these as reserved signed face/potential turno
 spending or fills. Repeated quoting can exhaust that allowance without any trade; do not
 promise continuous two-sided liquidity for the full authorized duration.
 
-Keeper serves currently authorized positions in the allowed pre-maturity window, not price
-liquidations. It never grants borrower authorization itself. Flash funding avoids wallet
-principal advance, not Gas cost. Require a verified positive onchain surplus threshold and
-expected net surplus after conservative Gas/other costs; stale prices or missing routes mean
-skip/stop, not wallet fallback. The full flash-funded debt settled may change after preview;
-do not describe an indicative debt size as an onchain notional ceiling. Gas/own-outlay limits
-and onchain minimum surplus are the protections, not guaranteed profit. Failed transactions
-can spend Gas and competition can remove an opportunity.
+Keeper serves explicitly allowed borrowers with current opt-in and Core withdrawal authorization
+in the allowed pre-maturity window, not price liquidations. It never grants or refreshes borrower
+authorization itself. ARM is permission, not a promise of keeper availability, liquidity,
+execution or timely cash. Flash funding avoids wallet principal advance, not Gas cost.
+
+### Keeper v2 hard bounds and economics
+
+Each transaction's calldata is reconstructed from the approved policy with these immutable bounds
+(`market.maturity` below means that market's `params.maturity`):
+
+```text
+deadline = min(policy.endsAt, market.maturity)
+maxDebt = market.keeper.maxDebtRaw
+maxLoanBalance = loanToken.maxWalletBalanceRaw
+maxCollateralBalance = collateralToken.maxWalletBalanceRaw
+```
+
+`market.keeper.maxDebtRaw` is a positive uint256 decimal integer string. Each approved token's
+`maxWalletBalanceRaw` is a uint256 decimal integer string allowing zero; use the relevant loan
+and collateral token entries, not human-unit amounts. The wrapper requires
+`block.timestamp < deadline` and settles exact full execution-time debt only if it is at most `maxDebt`; it never
+clips debt to the cap. An indicative preview debt is not this hard ceiling.
+
+The two wallet caps apply to the initiator's actual final balances after profit and leftover
+payouts, including pre-existing balances, not just transaction deltas or the wrapper's inventory.
+The wrapper enforces them atomically before unlock completes with reentrancy protection active;
+simulation/preflight alone is not that boundary. A zero collateral cap requires no pre-existing
+or retained collateral: a full swap with zero leftover is allowed. Partial-swap leftover above
+the cap reverts debt, collateral, pool movements and approvals atomically, but native Gas is
+still spent. Never redirect, clip or swap leftovers elsewhere to bypass a cap. External donations
+can put a wallet over cap and stop execution. This route assumes standard exact-transfer ERC20s,
+not fee-on-transfer/rebasing tokens, and a pool with no hooks.
+
+Require positive onchain gross loan-token `minProfit`. The MM repository's session executor
+derives it from `market.keeper.minNetProfitRaw` plus `otherCostsRaw` plus conservatively converted
+maximum transaction Gas. Require valid Gas-conversion evidence and exact-calldata simulation;
+unknown Gas, stale prices or missing routes mean skip/stop. This conservative simulated net
+threshold is not guaranteed realized net profit; onchain gross `minProfit` alone is not net PNL.
+Reverts spend native Gas, and competition can remove an opportunity. Wallet-cap failures are
+safety failures, not merely unprofitable-opportunity skips.
 
 Honor explicit stop immediately via the identified session's stop command; do not delay it
 for fresh strategy selection. Check and report the result without overstating it. This release

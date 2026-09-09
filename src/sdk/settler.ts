@@ -30,9 +30,21 @@ export const settlerAbi = parseAbi([
 
 // V4JitKeeper (bivium-core #170): the same settle, funded by a Uniswap v4 pool's flash accounting instead of the
 // caller's wallet. The wrapper is the settler's keeper; the caller only signs and collects the surplus, so no
-// balance and no approval are required — an unprofitable settle reverts whole instead of costing anything.
+// balance and no approval are required. An unprofitable settle reverts atomically, but still costs gas.
 export const jitKeeperAbi = parseAbi([
   "function settleWithFlash((uint256 chainId,address bivium,address loanToken,address collateralToken,uint256 maturity,uint256 strike,bool allowPartialRepay,address gate) params, address borrower, uint256 collateralAsk, (address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key, uint256 minProfit) returns (uint256)",
+]);
+
+export type ExecutionBounds = {
+  deadline: bigint;
+  maxDebt: bigint;
+  maxLoanBalance: bigint;
+  maxCollateralBalance: bigint;
+};
+
+export const boundedKeeperAbi = parseAbi([
+  "function settleWithFlashBounded((uint256 chainId,address bivium,address loanToken,address collateralToken,uint256 maturity,uint256 strike,bool allowPartialRepay,address gate) params, address borrower, uint256 collateralAsk, (address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) key, uint256 minProfit, (uint256 deadline,uint256 maxDebt,uint256 maxLoanBalance,uint256 maxCollateralBalance) bounds) returns (uint256)",
+  "event BoundedFlashSettled(address indexed keeper,address indexed borrower,uint256 consumedCollateral,uint256 leftoverCollateral,uint256 finalLoanBalance,uint256 finalCollateralBalance)",
 ]);
 
 // MorphoJitFunder: Morpho Blue's fee-less flash loan funds the repay, the v4 pool only converts the collateral
@@ -141,6 +153,11 @@ export class SettlerClient extends BiviumClient {
    *  the collateral back through the same pool and sends the surplus to the caller. No funds, no approvals. */
   settleWithFlash(jit: Address, params: MarketParams, borrower: Address, collateralAsk: bigint, key: PoolKey, minProfit: bigint) {
     return this.write({ address: jit, abi: jitKeeperAbi, functionName: "settleWithFlash", args: [this.fullParams(params), borrower, collateralAsk, key, minProfit] });
+  }
+
+  /** Explicit bounded wrapper: execution-time deadline, debt ceiling and final caller-wallet balance caps. */
+  settleWithFlashBounded(jit: Address, params: MarketParams, borrower: Address, collateralAsk: bigint, key: PoolKey, minProfit: bigint, bounds: ExecutionBounds) {
+    return this.write({ address: jit, abi: boundedKeeperAbi, functionName: "settleWithFlashBounded", args: [this.fullParams(params), borrower, collateralAsk, key, minProfit, bounds] });
   }
 
   /** Keeper-side, zero-capital, Morpho-funded: the MorphoJitFunder flash-borrows the debt from Morpho Blue,

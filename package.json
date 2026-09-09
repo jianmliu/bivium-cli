@@ -27,7 +27,8 @@
     "cli": "tsx src/cli/main.ts",
     "mcp": "tsx src/mcp/server.ts",
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:keeper-integration": "node --import tsx scripts/check-keeper-integration.mjs"
   },
   "dependencies": {
     "ajv": "^8.20.0",

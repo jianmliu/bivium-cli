@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "evidence": "SYNTHETIC software integration only; no live keeper E2E, admission, deployment or license attestation",
+  "pins": {
+    "core": {
+      "commit": "c8966120b1b4e8507721fa483e549a12e54cfb26",
+      "files": {
+        "src/interfaces/IBivium.sol": "42cef3761b4aa5b9ce6c544462e3032fee9d17359b5b66430220c432ecbbf5be",
+        "src/interfaces/IBiviumCallbacks.sol": "9edc18e20a51e1a74451fadc03c70877b1c654328dc9ed694c9c090e8ce06575",
+        "src/periphery/MaturitySettler.sol": "e04ab419694da15de721d7074ee0977b4124911291717f601cf4fa1a0fd6b3e1",
+        "src/periphery/V4JitKeeper.sol": "d413f387c72ab02ff99b3a11eb7900592df32a9078e28e36583521c2f0979756",
+        "src/periphery/univ4/IPoolManager.sol": "ea260cf76d243e53cd014cf3a05a8cef3e2048b74f67586388056a1d7e54c940",
+        "src/types/BiviumTypes.sol": "2e6ae76a0c57583896d5d2a8a3564be628a491cb2fd2239fa5d4a4dd4e974c6f"
+      }
+    },
+    "mm": {
+      "commit": "8ad7069541107012b5413bcecb001a9b36b9a6d0",
+      "files": {
+        "src/keeper.ts": "cd0853d26fe2706c797e449f7fca3578caf1b9d663b62f8431da80ea8d17f804",
+        "src/quote.ts": "8aff122136bea0414d132017b73e8243dcf406091a7e951232f6af7dae37531d",
+        "src/relayer.ts": "eaf24fe9c244b32ee7f5d3eec42010e7982d669198da94c3c628045ed3b8154a",
+        "src/sdk/abi.ts": "a371e7f528be9ca1f193ae8ee58cb9b4cc4781308b022e91ddf20238d92a8a51",
+        "src/sdk/lineage.ts": "3c358e06677c28bc5bf59f84c690f1fe30990f9bdb11c9fcb9bdd7239fd4ba2d",
+        "src/sdk/market.ts": "29212acc5e1df2eac0acb8cad5bbbac030bcff46264510d48492a8f1490aa3fd",
+        "src/sdk/math.ts": "fd08142743563ed60cd2be81c5f0e0a2c6cfb56775f822abe45ef3ea39320b7a",
+        "src/sdk/offer.ts": "7f26ba5c78bab41be2ff8ca429bb8f2f7630cefc7dd4c95c6d588a6a5a1fe6c3",
+        "src/sdk/ratify.ts": "226932bf40c77a5564aaff4f8e865cd23c5d6b81ec00b345bffb2302a9e93dbf",
+        "src/sdk/tick.ts": "a4a88ee55a95a640852a8e1d4da76e554001ec027d2b4bce8f1e4b2b0122e2d2",
+        "src/sdk/types.ts": "272cfc099ff9935b5a7d0878e31ccb4ad6933aadb5d04b8edb6f99be0159c482",
+        "src/session/chain.ts": "0813fa1ea9248e08d19b7f526a38717ed5a2a895176c59cd8d465593e5c2999e",
+        "src/session/engine.ts": "717837008c4fb47eff238c31bbf8d3cc67946bf3bba47cb2e7645d325fa98f05",
+        "src/session/keeperAbi.ts": "04e57ba0a9ea0fcfc2237701590da57e1c1ff5b8dc1a54d054ae3c181a38fb4f",
+        "src/session/policy.ts": "49d355fed3aa9935e449c965c0d95508679971fccc739ad7a0391006406bd72d",
+        "src/session/shape.ts": "52184eff901edec5feee7df5b99b31171e52a2c2d05c501848bc3c242e5fc5a0",
+        "src/session/store.ts": "75a39a3640f8252053ac7f1a5a2e74b8d36bf12468471d4e2599edd731518e24"
+      }
+    },
+    "cli": {
+      "commit": "0323d698020fae43f454b716c540f1a09cde08fc",
+      "files": {
+        "src/cli/boundedKeeper.ts": "1b80dd582dde40a6283ed061f86fd657fdba3dcfa2f6405a4ce765f4c6135d39",
+        "src/cli/main.ts": "f748a6d2a1b3fe7ebd0d6d57cd19a951292116c6dd076e386b048ec68a63a42e",
+        "src/sdk/abi.ts": "d8175aaed58408b4efeec418b07107cef13ea2d16ca2516d69564c001eda60fe",
+        "src/sdk/actions/calls.ts": "953ab06fdfa4c5eb071cb5757a6b745d789cebb22dcaea123b5b2af667b43a5f",
+        "src/sdk/client.ts": "b181ade4fc2600941c2bf36b97b13976016338987ac9375e17cea48f3f3b226d",
+        "src/sdk/lineage.ts": "3c358e06677c28bc5bf59f84c690f1fe30990f9bdb11c9fcb9bdd7239fd4ba2d",
+        "src/sdk/market.ts": "29212acc5e1df2eac0acb8cad5bbbac030bcff46264510d48492a8f1490aa3fd",
+        "src/sdk/math.ts": "fd08142743563ed60cd2be81c5f0e0a2c6cfb56775f822abe45ef3ea39320b7a",
+        "src/sdk/offer.ts": "0ad7281dc7fd0d90a45c66ebaea0f818f3d3b4aa4a693c94dd902c4672e64a56",
+        "src/sdk/ratify.ts": "a7dbc4d41f7967ea712c29f905cfef17023e03d4d3602c5ee0063612f2b8053c",
+        "src/sdk/settler.ts": "8249aa892993cd341371814a42a084b0bc3d2023dc051ba42f6be7666a8c9cad",
+        "src/sdk/tick.ts": "a4a88ee55a95a640852a8e1d4da76e554001ec027d2b4bce8f1e4b2b0122e2d2",
+        "src/sdk/types.ts": "3a143a8d730e4c38d70ee092a94e73c65f348519ce64265adc29a06abfcd3580",
+        "src/sdk/wallet.ts": "8b2e634674c16bb5e202c6d5c230889a5a9932bc372e8ae15328e1d2c21320e6"
+      }
+    }
+  },
+  "coreBuild": {
+    "artifact": "out/V4JitKeeper.sol/V4JitKeeper.json",
+    "compiler": {
+      "version": "0.8.28+commit.7893614a"
+    },
+    "metadataSha256": "97697bd489c0293117fedd4ba6aece4110b416de281ba07ab5daf13db7c4adbe",
+    "sources": {
+      "lib/openzeppelin-contracts/contracts/interfaces/IERC1363.sol": "0xd5ea07362ab630a6a3dee4285a74cf2377044ca2e4be472755ad64d7c5d4b69d",
+      "lib/openzeppelin-contracts/contracts/interfaces/IERC165.sol": "0x0afcb7e740d1537b252cb2676f600465ce6938398569f09ba1b9ca240dde2dfc",
+      "lib/openzeppelin-contracts/contracts/interfaces/IERC20.sol": "0x1a6221315ce0307746c2c4827c125d821ee796c74a676787762f4778671d4f44",
+      "lib/openzeppelin-contracts/contracts/interfaces/IERC20Metadata.sol": "0xd735962e3d6660884153ba8a972b5f100dde4c482f2ff1c525ba7fdefb154cbd",
+      "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol": "0x74ed01eb66b923d0d0cfe3be84604ac04b76482a55f9dd655e1ef4d367f95bc2",
+      "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol": "0xd6fa4088198f04eef10c5bce8a2f4d60554b7ec4b987f684393c01bf79b94d9f",
+      "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol": "0x377051c0c17a28038c32f58d76a42817eb3b24f2b4c6a2e788a9544e856d738d",
+      "lib/openzeppelin-contracts/contracts/utils/Panic.sol": "0xf7fe324703a64fc51702311dc51562d5cb1497734f074e4f483bfb6717572d7a",
+      "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol": "0xa516cbf1c7d15d3517c2d668601ce016c54395bf5171918a14e2686977465f53",
+      "lib/openzeppelin-contracts/contracts/utils/StorageSlot.sol": "0xcf74f855663ce2ae00ed8352666b7935f6cddea2932fdf2c3ecd30a9b1cd0e97",
+      "lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol": "0x8891738ffe910f0cf2da09566928589bf5d63f4524dd734fd9cedbac3274dd5c",
+      "lib/openzeppelin-contracts/contracts/utils/math/Math.sol": "0x59973a93b1f983f94e10529f46ca46544a9fec2b5f56fb1390bbe9e0dc79f857",
+      "lib/openzeppelin-contracts/contracts/utils/math/SafeCast.sol": "0xc8cae21c9ae4a46e5162ff9bf5b351d6fa6a6eba72d515f3bc1bdfeda7fdf083",
+      "src/interfaces/IBivium.sol": "0x2d1898da24d7af90305aa44ad189a24ce9b1750571f6f5d419db835c8399cd1f",
+      "src/interfaces/IBiviumCallbacks.sol": "0x1ea8425fce504377e86aeab4056075e0475632f71452482fa0ea5931b9e01463",
+      "src/periphery/MaturitySettler.sol": "0xd3613126c6d19f157133f8a5871eb1559e5995aabdd4cb5ebeec1c80f574f11a",
+      "src/periphery/V4JitKeeper.sol": "0xb9395792cf75857ef27eaeb1f7e95d6ad8eb6966d693d1cebfb6445831b8c08f",
+      "src/periphery/univ4/IPoolManager.sol": "0x994dafdeae87a9865181947952e61f3e392ce19b4c574717a1950c54173047e5",
+      "src/types/BiviumTypes.sol": "0x2d8e10fbd80a9cfc0c0f03c1b54921eea8a4b90934b3e6b31f0c5c318d49e69b"
+    }
+  },
+  "abi": {
+    "function": "settleWithFlashBounded",
+    "selector": "0xf1f3503a",
+    "event": "BoundedFlashSettled",
+    "topic": "0xc089e9d384c6a7d049df1ce84ecc6582325d9898b088e7a02e490a002f5a6fa8",
+    "normalization": "Preserve ordered input/tuple names and types, function mutability, outputs types, event indexed flags; ignore internalType and output labels."
+  },
+  "fixtures": {
+    "test/fixtures/keeper-v2/core-abi.json": "6309917cf592aca741e1b78ad36321e797b3d977fa9061671674172c89c097cb",
+    "test/fixtures/keeper-v2/vectors.json": "e9116cb7a9bc9e70c5efb6f716748fb494a0689270ec31f7900b8d88416a19ee"
+  },
+  "vectorSchema": "Four full calldata vectors: both sorted-pair market orientations x session-end/maturity deadline; zero collateral cap.",
+  "dependencyScope": "Core dependency metadata Keccak verified as build evidence only. node_modules excluded from source provenance; installed JS dependency resolution is an environmental prerequisite."
+}

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // bivium — CLI over the Bivium SDK (core-v1 lineage). See docs/spec/2026-08-09-bivium-cli-spec.md.
 import { randomBytes } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import { getAddress } from "viem";
+import { getAddress, type Account } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   adapterFor,
@@ -75,6 +76,7 @@ import { classifyLine, orientation } from "../sdk/strategies/lines.ts";
 import { getStrategy } from "../sdk/strategies/catalog.ts";
 import { computeMarketId } from "../sdk/market.ts";
 import { runStrategyCommand } from "./strategy.ts";
+import { executeBoundedKeeper, validateSettlementRouteFlags } from "./boundedKeeper.ts";
 import {
   STRATEGIES,
   catalogJson,
@@ -127,7 +129,9 @@ usage: bivium <command> [options]
   settle disarm (market flags | --offer <file>)
   settle status (market flags | --offer <file>) [--borrower <addr>]        # floor share, cap now, settleable bound
   settle execute (market flags | --offer <file>) --borrower <addr> [--ask <human>]  # keeper: fund the repay (names the size)
-    [--via-jit | --via-morpho] [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]  # zero-capital: v4 flash accounting, or a Morpho flash loan converted on v4
+    [--via-jit | --via-morpho | --via-jit-bounded] [--min-profit <loan>] [--pool-fee 3000] [--pool-spacing 60] [--pool-hooks 0x0]
+    --via-jit-bounded requires --bounded-jit-wrapper <addr> --bounded-jit-code-hash <bytes32> --deadline <unix>
+      --max-debt <loan> --max-loan-balance <loan> --max-collateral-balance <collateral> --min-profit <positive loan>  # chain 46630, hookless; caps may be zero; gas still payable
   mock mint --token <symbol|addr> --to <addr> --amount <human>
   wallet create [--out <file>]        # throwaway wallet, key file mode 0600
   wallet address|balance [--key-file <f> | --account <addr>]
@@ -193,6 +197,12 @@ const OPTIONS = {
   keep: { type: "string" },
   ask: { type: "string" },
   "via-jit": { type: "boolean" },
+  "via-jit-bounded": { type: "boolean" },
+  "bounded-jit-wrapper": { type: "string" },
+  "bounded-jit-code-hash": { type: "string" },
+  "max-debt": { type: "string" },
+  "max-loan-balance": { type: "string" },
+  "max-collateral-balance": { type: "string" },
   "via-morpho": { type: "boolean" },
   "min-profit": { type: "string" },
   "pool-fee": { type: "string" },
@@ -281,6 +291,7 @@ interface Ctx {
   json: boolean;
   keyEnv: string;
   values: Record<string, string | boolean | undefined>;
+  settlementAccountProvider?: () => Account;
 }
 
 async function tokenDecimals(ctx: Ctx, address: Address): Promise<number> {
@@ -1175,10 +1186,16 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     ].join("\n"));
   },
   "settle execute": async (ctx) => {
+    validateSettlementRouteFlags(ctx.values);
     const settler = ctx.profile.maturitySettler ?? fail("profile has no maturitySettler for this chain");
     const market = await resolveMarket(ctx);
     const borrower = getAddress(need(ctx.values.borrower as string | undefined, "borrower")) as Address;
-    const sc = new SettlerClient(ctx.profile, accountFor(ctx), settler);
+    if (ctx.values["via-jit-bounded"]) {
+      const result = await executeBoundedKeeper(ctx.profile, market, borrower, ctx.values, () => ctx.settlementAccountProvider?.() ?? accountFor(ctx));
+      output(ctx.json, result, `settled via bounded v4 flash: indicative pre-read debt ${result.indicativeDebt} loan (actual execution notional not decoded), ask ${result.ask} collateral (${result.tx}); gas still payable`);
+      return;
+    }
+    const sc = new SettlerClient(ctx.profile, ctx.settlementAccountProvider?.() ?? accountFor(ctx), settler);
     const id = sc.marketId(market.params);
     const [auth, position] = await Promise.all([sc.authorization(id, borrower), sc.position(id, borrower)]);
     if (!auth.enabled) fail("borrower has not armed this market");
@@ -2114,8 +2131,8 @@ function renderStrategyPlan(g: GatheredStrategy, plan: Plan): string[] {
   return lines;
 }
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+/** CLI entrypoint; settlement can use an injected account with a local transport, without reading key files. */
+export async function runCli(argv = process.argv.slice(2), settlementAccountProvider?: () => Account): Promise<void> {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     console.log(USAGE);
     return;
@@ -2133,11 +2150,19 @@ async function main(): Promise<void> {
     json: values.json === true,
     keyEnv: values["key-env"] as string,
     values: values as Ctx["values"],
+    settlementAccountProvider,
   };
   await command(ctx);
 }
 
-main().catch((error: unknown) => {
+// Support both direct tsx execution and the installed bin shim, including symlinked npm bins.
+let entry: string | undefined;
+try {
+  if (process.argv[1] && process.argv[1] !== "-") entry = realpathSync(process.argv[1]);
+} catch {
+  // Stdin/eval/embedded importers need not supply a resolvable filesystem entrypoint.
+}
+if (entry === fileURLToPath(import.meta.url) || entry === fileURLToPath(new URL("../../bin/bivium.mjs", import.meta.url))) runCli().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`error: ${message}`);
   process.exit(1);
