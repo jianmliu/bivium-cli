@@ -1,3 +1,4 @@
+import { wireOffer } from "../../sdk/relayer.ts";
 import { ActionContext } from "../../sdk/actions/context.ts";
 import { accountSnapshot, marketDetails, orderStatus, transactionStatus, bookSnapshot } from "../../sdk/actions/reads.ts";
 import { ActionError, result } from "../../sdk/actions/types.ts";
@@ -17,6 +18,7 @@ export const offerSchema = {
   required: ["chainId", "bivium", "loanToken", "collateralToken", "maturity", "strike", "allowPartialRepay", "gate", "maker", "buy", "tick", "maxUnits", "maxAssets", "start", "expiry", "group", "ratifier"],
 };
 export const objectSchema = (properties: Record<string, unknown>, required = Object.keys(properties)) => ({ type: "object", properties, required, additionalProperties: false });
+export function mcpOffer(context: ActionContext, offer: Offer) { return { ...wireOffer(context.profile, offer), chainId: context.profile.chainId }; }
 export function reviveOffer(context: ActionContext, wire: Record<string, unknown>): Offer {
   if (wire.chainId !== context.profile.chainId || String(wire.bivium).toLowerCase() !== context.profile.core.toLowerCase()) throw new ActionError("DOMAIN_MISMATCH", "Offer belongs to another chain/Core");
   const { chainId, bivium, ...fields } = wire;
@@ -38,7 +40,7 @@ export function createReadTools(context: ActionContext, capabilities: { relayerW
     switch (tool.name) {
       case "server_info": return result({ version: "0.1.0", profile: context.profile.name, chainId: context.profile.chainId, core: context.profile.core, abiProfile: context.profile.abiProfile, supportedActions: ["fund", "repay", "withdraw_liquidity", "claim", "escrow_collateral", "withdraw_collateral_escrow", "withdraw_collateral", "buy_dcn", "sell_dcn", "borrow", "strategy_program"], tools: capabilities.tools ?? [], policyIds: capabilities.policyIds ?? [], ratifiers: { signature: context.profile.signatureRatifier, setter: context.profile.setterRatifier ?? null }, relayerWrites: capabilities.relayerWrites ?? false, chainSigning: false, chainBroadcasting: false, executableNetwork: context.profile.chainId === 46630 && context.profile.abiProfile === "core-v2", limits: { list: 100, marketIds: 20, rpcConcurrency: 8, requestMs: 30000, simulationMs: 60000, upstreamMs: 8000 }, limitations: ["Legacy strategy plans are descriptive.", "Snapshots do not reserve funds.", "Complete outstanding signature inventory is unknown."] }, null);
       case "market_details": return marketDetails(context, args.marketId as Hex, signal);
-      case "book_snapshot": return bookSnapshot(context, args.marketId as Hex, { side: args.side as "bid" | "ask" | undefined, limit: args.limit as number | undefined, cursor: args.cursor as string | undefined }, signal);
+      case "book_snapshot": { const response = await bookSnapshot(context, args.marketId as Hex, { side: args.side as "bid" | "ask" | undefined, limit: args.limit as number | undefined, cursor: args.cursor as string | undefined }, signal); return { ...response, data: { ...response.data, entries: response.data.entries.map(entry => ({ ...entry, offer: mcpOffer(context, entry.offer) })) } }; }
       case "account_snapshot": return accountSnapshot(context, args.account as Address, args.marketIds as Hex[], signal);
       case "order_status": return orderStatus(context, reviveOffer(context, args.offer as Record<string, unknown>), args.ratifierData as Hex, args.commitment as Hex | undefined, signal);
       case "transaction_status": return transactionStatus(context, args.txHash as Hex, signal);
