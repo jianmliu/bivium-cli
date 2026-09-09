@@ -9,6 +9,11 @@
 // or sends — execution stays with the CLI (`borrow execute`, `trade buy`, …) under the user's key,
 // which is the "preview and execute are separate calls" rule from the design note.
 import type { Readable, Writable } from "node:stream";
+import { once } from "node:events";
+import { createHash } from "node:crypto";
+import { ActionError } from "../sdk/actions/types.ts";
+import { ActionContext } from "../sdk/actions/context.ts";
+import { createReadTools, READ_TOOL_SPECS } from "./tools/reads.ts";
 import { addressSchema, tokenSchema, decimalAmountSchema, integerStringSchema, integerSchema, positiveIntegerSchema } from "./schema.ts";
 import { ToolRegistry, READ_ONLY_ANNOTATIONS, type ToolDef, type ToolDefinition } from "./registry.ts";
 import { toolContent, toolFailure } from "./result.ts";
@@ -52,6 +57,7 @@ export interface JsonRpcResponse {
 export interface McpDeps {
   profile: DeploymentProfile;
   client?: BiviumClient;
+  actionContext?: ActionContext;
   /** Pre-fetched rows / spot / book — tests, or a host that already holds them. */
   overrides?: { rows?: PoolRow[]; spot?: SpotRef; book?: BookLoader; parity?: HttpQuoteLoader | false; positions?: (taker: string) => Promise<HttpPositionsResult> };
   now?: () => bigint;
@@ -75,7 +81,7 @@ const viewProps = {
   chunkBlocks: { ...positiveIntegerSchema, description: "getLogs blocks per call for chain scans (default 900; e.g. 200000 on RPCs that allow it)" },
 } as const;
 
-export const TOOLS: ToolDef[] = [
+export const LEGACY_TOOLS: ToolDef[] = [
   {
     name: "strategy_list",
     description: "The strategy catalog: id, name, group, side/line, legs, worst-case form, mirror, inputs. Read this first.",
@@ -84,7 +90,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "market_list",
     description: "Discovered markets with pair, product line, human strike (numeraire per asset), maturity — pick a maturity here before quoting. Join existing markets; never invent one.",
-    inputSchema: { type: "object", properties: { source: viewProps.source, fromBlock: viewProps.fromBlock, chunkBlocks: viewProps.chunkBlocks }, additionalProperties: false },
+    inputSchema: { type: "object", properties: { source: viewProps.source, fromBlock: viewProps.fromBlock, chunkBlocks: viewProps.chunkBlocks, limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", maxLength: 1024 }, filters: { type: "object", additionalProperties: false, properties: { maturity: integerStringSchema, loanToken: addressSchema, collateralToken: addressSchema, gate: addressSchema, allowPartialRepay: { type: "boolean" } } } }, additionalProperties: false },
   },
   {
     name: "strategy_quote",
@@ -112,6 +118,7 @@ export const TOOLS: ToolDef[] = [
     inputSchema: { type: "object", properties: { taker: { ...addressSchema, description: "the account address" } }, required: ["taker"], additionalProperties: false },
   },
 ].map(tool => ({...tool, annotations: READ_ONLY_ANNOTATIONS}));
+export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS];
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
@@ -150,7 +157,7 @@ function gatherRequestFrom(args: Record<string, unknown>, deps: McpDeps): Gather
     priceWad: big(args.priceWad, "priceWad"),
     aprBps: big(args.aprBps, "aprBps"),
     sigmaAnnual: num(args.sigma, "sigma"),
-    market: { source, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks") },
+    market: { source, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n },
     now: deps.now?.(),
     rows: deps.overrides?.rows,
     spot: deps.overrides?.spot,
@@ -167,13 +174,32 @@ export function createStrategyMcp(deps: McpDeps) {
       case "strategy_list":
         return { count: catalogJson().length, strategies: catalogJson() };
       case "market_list": {
-        const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks") })));
+        const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n })));
+        const filters = (args.filters ?? {}) as Record<string, unknown>;
+        const binding = createHash("sha256").update(JSON.stringify([profile.chainId, profile.core.toLowerCase(), profile.abiProfile, args.source ?? null, args.fromBlock ?? null, args.chunkBlocks ?? null, ...["maturity", "loanToken", "collateralToken", "gate", "allowPartialRepay"].map((key) => typeof filters[key] === "string" ? String(filters[key]).toLowerCase() : filters[key] ?? null)])).digest("hex");
+        let offset = 0;
+        if (args.cursor) {
+          try {
+            const decoded = JSON.parse(Buffer.from(String(args.cursor), "base64url").toString());
+            if (decoded.binding !== binding || !Number.isSafeInteger(decoded.offset) || decoded.offset < 0) throw new Error();
+            offset = decoded.offset;
+          } catch { throw new ActionError("INVALID_ARGUMENT", "Invalid cursor for deployment/filter"); }
+        }
+        const filtered = rows.filter((row) => Object.entries(filters).every(([key, value]) => String(row.market.params[key as keyof typeof row.market.params]).toLowerCase() === String(value).toLowerCase()));
+        const limit = (args.limit as number | undefined) ?? 20;
+        const page = filtered.slice(offset, offset + limit);
         return {
-          count: rows.length,
-          markets: rows.map((r) => {
+          count: filtered.length,
+          nextCursor: offset + limit < filtered.length ? Buffer.from(JSON.stringify({ binding, offset: offset + limit })).toString("base64url") : null,
+          coverage: "partial",
+          source: args.source ?? (profile.relayerUrl ? "relayer" : "chain"),
+          markets: page.map((r) => {
             const line = classifyLine(r.loanSymbol, r.collateralSymbol);
             return {
               id: r.market.id,
+              chainId: profile.chainId,
+              bivium: profile.core,
+              allowPartialRepay: r.market.params.allowPartialRepay,
               pair: `${r.collateralSymbol ?? r.market.params.collateralToken}/${r.loanSymbol ?? r.market.params.loanToken}`,
               line,
               loanToken: r.market.params.loanToken,
@@ -212,7 +238,9 @@ export function createStrategyMcp(deps: McpDeps) {
     }
   }
 
-  const registry = new ToolRegistry(TOOLS.map(tool => ({...tool, timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})));
+  const actionContext = deps.actionContext ?? new ActionContext({ profile, markets: deps.overrides?.rows ? async () => deps.overrides!.rows!.map((r) => r.market) : undefined });
+  const registry = new ToolRegistry(LEGACY_TOOLS.map(tool => ({...tool, concurrency: tool.name === "strategy_list" ? "local" : "bounded", timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})));
+  for (const tool of createReadTools(actionContext)) registry.register({...tool, concurrency: tool.name === "server_info" ? "local" : "managed"});
   for (const tool of deps.tools ?? []) registry.register(tool);
   const callTool = (name: string, args: unknown) => registry.call(name,args);
 
@@ -265,7 +293,9 @@ export interface StdioStreams { input: Readable; output: Writable; diagnostics: 
 export async function serveStdio(deps: McpDeps, streams: StdioStreams = {input:process.stdin,output:process.stdout,diagnostics:process.stderr}): Promise<void> {
   const mcp = createStrategyMcp(deps);
   const {input,output,diagnostics} = streams;
-  const write = (response: unknown) => output.write(JSON.stringify(response) + "\n");
+  const write = async (response: unknown): Promise<void> => {
+    if (!output.write(JSON.stringify(response) + "\n")) await once(output, 'drain');
+  };
   diagnostics.write(`bivium-mcp: ${SERVER_INFO.name} ${SERVER_INFO.version} on profile ${deps.profile.name}\n`);
   let chunks: Buffer[] = [];
   let size = 0;
@@ -275,9 +305,9 @@ export async function serveStdio(deps: McpDeps, streams: StdioStreams = {input:p
     if (!line) return;
     let message: unknown;
     try { message = JSON.parse(line); }
-    catch { write({jsonrpc:'2.0',id:null,error:{code:-32700,message:'parse error'}}); return; }
+    catch { await write({jsonrpc:'2.0',id:null,error:{code:-32700,message:'parse error'}}); return; }
     const response = await mcp.handle(message);
-    if (response) write(response);
+    if (response) await write(response);
   }
   for await (const value of input) {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -289,7 +319,7 @@ export async function serveStdio(deps: McpDeps, streams: StdioStreams = {input:p
         const length = end-offset;
         if (size + length > MAX_LINE_BYTES) {
           chunks = []; size = 0; dropping = true;
-          write({jsonrpc:'2.0',id:null,error:{code:-32600,message:'request line exceeds 1 MiB'}});
+          await write({jsonrpc:'2.0',id:null,error:{code:-32600,message:'request line exceeds 1 MiB'}});
         } else if (length) { chunks.push(Buffer.from(chunk.subarray(offset,end))); size += length; }
       }
       if (newline !== -1) {

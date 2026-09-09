@@ -38,7 +38,7 @@ test("mcp: handshake + tools/list", async () => {
   assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null);
   const list = await mcp.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.deepEqual((list!.result as { tools: { name: string }[] }).tools.map((t) => t.name), TOOLS.map((t) => t.name));
-  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan", "strategy_positions"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan", "strategy_positions", "server_info", "market_details", "account_snapshot", "order_status", "transaction_status"]);
   const unknown = await mcp.handle({ jsonrpc: "2.0", id: 3, method: "nope" });
   assert.equal(unknown!.error!.code, -32601);
 });
