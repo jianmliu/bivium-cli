@@ -32,3 +32,16 @@ test('stdio malformed JSON and split UTF-8 recover and final unterminated reques
  input.write('invalid\n');const bytes=Buffer.from(JSON.stringify({jsonrpc:'2.0',id:3,method:'ping',params:{text:'é'}}));const index=bytes.indexOf(0xc3);input.write(bytes.subarray(0,index+1));input.end(bytes.subarray(index+1));await serving;
  const responses=text.trim().split('\n').map(line=>JSON.parse(line));assert.equal(responses[0].error.code,-32700);assert.equal(responses[1].id,3);
 });
+
+test('stdio stops dispatching while stdout applies backpressure',async()=>{
+ const input=new PassThrough(), output=new PassThrough({highWaterMark:1}),diagnostics=new PassThrough();
+ let handled=0;
+ const serving=serveStdio({profile,tools:[{name:'count',description:'test',inputSchema:{type:'object'},handler:()=>({count:++handled})}]},{input,output,diagnostics});
+ const request=(id:number)=>JSON.stringify({jsonrpc:'2.0',id,method:'tools/call',params:{name:'count',arguments:{}}})+'\n';
+ input.end(request(1)+request(2));
+ await flush();
+ assert.equal(handled,1,'dispatch must pause until the output consumer drains');
+ let text=''; output.on('data',chunk=>text+=chunk);
+ await serving;
+ assert.equal(handled,2);assert.equal(text.trim().split('\n').length,2);
+});

@@ -53,3 +53,20 @@ test('concurrency stays bounded for uncancellable work and aborts queued calls',
  await assert.rejects(withDeadline(signal=>limit(()=>{ran=true;},signal),5),/deadline/);
  assert.equal(ran,false);assert.equal(peak,2);release.forEach(fn=>fn());await Promise.all([first,second]);await limit(()=>{ran=true;});assert.equal(ran,true);
 });
+
+test('saturated uncancellable legacy calls do not block catalog or server info', async () => {
+ let started = 0;
+ const saturated = createStrategyMcp({profile, requestTimeoutMs:10, overrides:{positions:()=>{started++;return new Promise(()=>{});}}, tools:[{name:'default_bounded',description:'test',inputSchema:{type:'object'},timeoutMs:10,handler:()=>{started++;return {};}}]});
+ const hanging = Array.from({length:8},()=>saturated.callTool('strategy_positions',{taker:addr}));
+ await Promise.all(hanging.map(call=>assert.rejects(call,/deadline/)));
+ assert.equal(started,8);
+ const catalog = await saturated.callTool('strategy_list',{}) as {count:number};
+ assert.equal(catalog.count,10);
+ const info = await saturated.callTool('server_info',{}) as {schemaVersion:number};
+ assert.equal(info.schemaVersion,1);
+ saturated.registry.register({name:'managed',description:'test',inputSchema:{type:'object'},concurrency:'managed',handler:()=>({ready:true})});
+ assert.deepEqual(await saturated.callTool('managed',{}),{ready:true});
+ await assert.rejects(saturated.callTool('default_bounded',{}),/deadline/);
+ assert.equal(started,8,'unresolved legacy slots must remain occupied');
+ assert.equal('concurrency' in saturated.registry.list()[0],false);
+});
