@@ -106,3 +106,39 @@ test('MCP workflow reference ships and stays synchronized', () => {
   for (const text of ['action_preview', 'action_prepare', 'mm_preview', 'order_prepare', 'submission_unknown', 'order_cancel_prepare', 'order_delist', 'netProfitLowerBound=null', 'maxTopUp', 'raw integer strings']) assert.ok(dist.includes(text), text);
   assert.ok(readFileSync(new URL('../skills/bivium/SKILL.md', import.meta.url), 'utf8').includes('(references/mcp.md)'));
 });
+
+test('operator reference exposes the exact policy-to-bounded-calldata mapping', () => {
+  const guide = readFileSync(new URL('../skills/bivium/references/operators.md', import.meta.url), 'utf8');
+  const mappings = new Map([...guide.matchAll(/^(deadline|maxDebt|maxLoanBalance|maxCollateralBalance) = (.+)$/gm)]
+    .map(([, field, value]) => [field, value]));
+  assert.deepEqual(Object.fromEntries(mappings), {
+    deadline: 'min(policy.endsAt, market.maturity)',
+    maxDebt: 'market.keeper.maxDebtRaw',
+    maxLoanBalance: 'loanToken.maxWalletBalanceRaw',
+    maxCollateralBalance: 'collateralToken.maxWalletBalanceRaw',
+  });
+  for (const identifier of ['settleWithFlashBounded', 'BoundedFlashSettled', 'minNetProfitRaw', 'otherCostsRaw']) {
+    assert.ok(guide.includes(identifier), `operator schema/receipt reference must include ${identifier}`);
+  }
+});
+
+test('operator recovery documents the keyless command independently of execution', () => {
+  const guide = readFileSync(new URL('../skills/bivium/references/operators.md', import.meta.url), 'utf8');
+  const reconcileCommands = guide.split('\n').filter(line => line.startsWith('npm run session -- reconcile'));
+  assert.deepEqual(reconcileCommands, ['npm run session -- reconcile --state-dir "$STATE_DIR"']);
+  const blocks = [...guide.matchAll(/```bash\n([\s\S]*?)```/g)].map(([, commands]) => commands);
+  const recovery = blocks.find(commands => commands.includes('npm run session -- reconcile'));
+  assert.ok(recovery, 'keyless recovery must be a discoverable command example');
+  assert.doesNotMatch(recovery, /--key-file|--policy|--confirm|session -- (?:approve|run)\b/,
+    'recovery must not require execution credentials or renewed approval');
+});
+
+test('manual bounded keeper routing is explicitly separate from operator automation', () => {
+  const skill = readFileSync(new URL('../skills/bivium/SKILL.md', import.meta.url), 'utf8');
+  const guide = readFileSync(new URL('../skills/bivium/references/operators.md', import.meta.url), 'utf8');
+  for (const document of [skill, guide]) {
+    assert.ok(document.includes('--via-jit-bounded'), 'manual bounded mode must be discoverable');
+    assert.match(document, /separately authorized single transaction/i);
+    assert.match(document, /not[^\n]*automation[^\n]*budget approval/i);
+  }
+});
