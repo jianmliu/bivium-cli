@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+
+test("all distributed operator and conversation references ship with matching repo-local copies", () => {
+  const root = new URL("../skills/bivium/references/", import.meta.url);
+  const localRoot = new URL("../.claude/skills/bivium/references/", import.meta.url);
+  const files = readdirSync(root).sort();
+  assert.ok(files.includes("operators.md"), "the operator workflow must be packaged with the Skill");
+  assert.deepEqual(readdirSync(localRoot).sort(), files);
+  for (const file of files) {
+    assert.equal(readFileSync(new URL(file, localRoot), "utf8"), readFileSync(new URL(file, root), "utf8"));
+  }
+});
 
 test("the distributable skill and the repo-local skill are the same file", () => {
   const dist = readFileSync(new URL("../skills/bivium/SKILL.md", import.meta.url), "utf8");

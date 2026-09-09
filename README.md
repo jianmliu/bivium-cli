@@ -16,6 +16,21 @@ a weekly series. Meme collateral can become worthless even while settlement work
 `4663`: do not write, construct, sign, or submit transactions there. Mainnet is identity/reference-
 only until a separate release is approved.
 
+## Agent-operated MM and keeper
+
+The Skill also routes requests to make markets or operate a maturity-settlement keeper through
+the [operator guide](skills/bivium/references/operators.md). These roles use the companion
+`bivium-mm` local session executor, not new consumer strategy IDs or the legacy combined Worker.
+Automatic execution is available only after checking the installed executor's capabilities and
+explicitly approving its exact role/account/market/budget/expiry policy. Ordinary CLI trades
+still require per-transaction approval; this does not add signing to the read-only MCP server.
+
+Use separate user-controlled dedicated accounts for MM and keeper. Limits are enforced by
+software, not cryptographic restrictions on the EOA key. The initial operator mode excludes
+automatic borrowing, taker/self-arm passes, principal advances, funding and rollover. Stopping
+does not cancel live offers, reverse pending transactions or return invested capital.
+Installing the Skill does not install a background service, deploy a Worker or start a strategy.
+
 ## Install
 
 Node.js 20 or newer is required.

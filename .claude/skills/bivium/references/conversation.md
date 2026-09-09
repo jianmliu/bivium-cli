@@ -2,6 +2,8 @@
 
 Use this guide for conversational yield and directional requests. It changes the conversation,
 not the protocol, supported commands, risk gates, or signing authority in `SKILL.md`.
+For running an MM or keeper, use [the operator guide](operators.md); do not route those operational
+roles through the four consumer strategies or treat consumer consent as automatic-run approval.
 
 ## Understand the decision before choosing a strategy
 
@@ -83,7 +85,8 @@ economically recoverable principal. Never imply Core prevents rugs or certifies 
 Stop on policy rejection or `require_user_confirmation`; acceptance requires SDK `assessRisk`
 with explicit `user-policy` for the same market/evidence before `buildPlan`. The CLI has no
 bypass. Consent to discuss a product is not policy acceptance or permission to sign. Every
-transaction still requires its own user approval and signature on the supported testnet only.
+ordinary consumer transaction requires its own user approval and signature on the supported
+testnet only; separately approved operator sessions follow their own narrow authorization.
 
 ## Explain the lifecycle that actually exists
 
