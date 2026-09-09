@@ -17,9 +17,10 @@
 //   the fill cannot slip into new-debt origination.
 import { encodeFunctionData, type Account } from "viem";
 import { BiviumClient, type TxResult } from "./client.ts";
-import type { ChainDomain } from "./lineage.ts";
+import { adapterFor, type ChainDomain } from "./lineage.ts";
 import { marketParamsFromOffer } from "./offer.ts";
 import {
+  entryFromSignedOffer,
   makerBackingKey,
   type MakerBacking,
   fillCost,
@@ -37,7 +38,7 @@ import {
 import { collateralForDebt } from "./math.ts";
 import { RATIFIED } from "./ratify.ts";
 import { cancelMessage, deleteSignedOffer, requireRelayerV2 } from "./relayer.ts";
-import type { DeploymentProfile, Hex } from "./types.ts";
+import type { Address, DeploymentProfile, Hex } from "./types.ts";
 
 /**
  * Collateral a resting ask's maker is short of for `units`: what core would lock for the units beyond the maker's
@@ -181,81 +182,11 @@ export class TradeClient extends BiviumClient {
   }
 
   /** Every check either sweep runs before spending gas. Throws with the first violation. */
-  private async preflight(plan: TradePlan): Promise<{ marketId: Hex }> {
-    if (plan.takes.length === 0) throw new Error("nothing to fill — empty or filtered-out book");
-    const taker = this.account;
-    const block = await this.pub.getBlock();
-    const now = block.timestamp;
-    const marketIds = new Set(plan.takes.map((t) => this.marketId(marketParamsFromOffer(t.entry.offer))));
-    if (marketIds.size !== 1) throw new Error("sweep spans multiple markets — refusing");
-    const marketId = [...marketIds][0] as Hex;
-
-    for (const { entry } of plan.takes) {
-      const o = entry.offer;
-      if (o.maker.toLowerCase() === taker.toLowerCase()) {
-        throw new Error(`offer ${entry.commitment} is your own (SelfDeal) — cancel it instead of filling it`);
-      }
-      if (now < o.start || now > o.expiry) {
-        throw new Error(`offer ${entry.commitment} is outside its [start, expiry] window`);
-      }
-      const registered = await this.pub.readContract({
-        address: this.profile.core,
-        abi: this.adapter.coreAbi,
-        functionName: "isRatifier",
-        args: [o.maker, o.ratifier],
-      } as never);
-      if (registered !== true) throw new Error(`maker of ${entry.commitment} has not registered its ratifier on core`);
-      const ratified = await this.pub
-        .readContract({
-          address: o.ratifier,
-          abi: this.adapter.ratifierAbi,
-          functionName: "isRatified",
-          args: this.adapter.ratifierArgs(o.maker, o.maxUnits, entry.commitment, entry.signature),
-        } as never)
-        .catch(() => undefined);
-      if (ratified !== RATIFIED) throw new Error(`ratifier precheck did not return RATIFIED for ${entry.commitment}`);
-    }
-
-    if (plan.side === "ask") {
-      // Buying resting asks: each maker transfers the credit it holds and originates the rest against its escrow.
-      const strike = plan.takes[0].entry.offer.strike;
-      const maturity = plan.takes[0].entry.offer.maturity;
-      const perMaker = new Map<string, bigint>();
-      for (const t of plan.takes) perMaker.set(t.entry.maker, (perMaker.get(t.entry.maker) ?? 0n) + t.units);
-      for (const [maker, units] of perMaker) {
-        const credit = await this.creditOf(marketId, maker as Hex);
-        if (credit >= units) continue;
-        const escrow = await this.collateralEscrowOf(marketId, maker as Hex);
-        const shortfall = askBackingShortfall({ units, credit, escrow, strike });
-        if (shortfall > 0n) {
-          throw new Error(
-            escrow === 0n
-              ? `maker ${maker} holds ${credit} credit and no escrowed collateral but the plan takes ${units} — ask fill would revert (OnlyTakerMayBorrow)`
-              : `maker ${maker} holds ${credit} credit and ${escrow} escrowed collateral, short ${shortfall} collateral for the ${units - credit} units it would originate — ask fill would revert (InsufficientCollateralEscrow)`,
-          );
-        }
-        if (now >= maturity) {
-          throw new Error(`maker ${maker} would originate ${units - credit} units but the market matured — fill would revert (MaturityPassed)`);
-        }
-      }
-    } else {
-      // Selling into resting bids: the taker must hold every unit it sells (no origination slip),
-      // and each bid maker's pre-funded liquidity must cover its proceeds.
-      const credit = await this.creditOf(marketId, taker);
-      if (credit < plan.totalUnits) {
-        throw new Error(`you hold ${credit} credit but are selling ${plan.totalUnits} — a shortfall would originate new debt, refusing`);
-      }
-      const perMaker = new Map<string, bigint>();
-      for (const t of plan.takes) {
-        const cost = fillCost(t.entry.offer, t.units, t.entry.price);
-        perMaker.set(t.entry.maker, (perMaker.get(t.entry.maker) ?? 0n) + cost);
-      }
-      for (const [maker, cost] of perMaker) {
-        const liquidity = await this.liquidityOf(marketId, maker as Hex);
-        if (liquidity < cost) throw new Error(`bid maker ${maker} liquidity ${liquidity} below required ${cost}`);
-      }
-    }
-    return { marketId };
+  public async preflight(plan: TradePlan, account: Address | undefined = undefined, block?: { number: bigint; timestamp: bigint }) {
+    if (!plan.takes.length) throw new Error("nothing to fill — empty or filtered-out book");
+    const pinned = block ?? await this.pub.getBlock();
+    if (pinned.number === null) throw new Error("No mined block available");
+    return validateTradePlan(plan, { profile: this.profile, account: account ?? this.account, block: { number: pinned.number, timestamp: pinned.timestamp }, read: r => this.pub.readContract(r as never) });
   }
 
   /** Encode one `fill` per take and submit them as a single core `multicall`. */
@@ -371,4 +302,67 @@ async function boundedMap<T, R>(values: T[], fn: (value: T) => Promise<R>): Prom
   const result: R[] = [];
   for (let i = 0; i < values.length; i += 8) result.push(...await Promise.all(values.slice(i, i + 8).map(fn)));
   return result;
+}
+
+/** One account-independent validator shared by wallet execution and unsigned action preparation. */
+export async function validateTradePlan(plan: TradePlan, env: {
+  profile: DeploymentProfile; account: Address; block: { number: bigint; timestamp: bigint };
+  mode?: "secondary" | "borrow"; taker?: Address;
+  read: (request: { address: Address; abi: readonly unknown[]; functionName: string; args: readonly unknown[]; blockNumber: bigint }) => Promise<unknown>;
+}) {
+  if (!plan.takes.length) throw new Error("nothing to fill — empty book");
+  const adapter = adapterFor(env.profile.abiProfile), state: Record<string, unknown> = {};
+  const read = async <T>(address: Address, abi: readonly unknown[], functionName: string, args: readonly unknown[]): Promise<T> => {
+    const value = await env.read({ address, abi, functionName, args, blockNumber: env.block.number });
+    state[`${address.toLowerCase()}:${functionName}:${args.map(String).join(":")}`] = value;
+    return value as T;
+  };
+  const core = <T>(name: string, args: readonly unknown[]) => read<T>(env.profile.core, adapter.coreAbi, name, args);
+  const marketIds = new Set(plan.takes.map(t => adapter.computeMarketId(env.profile, marketParamsFromOffer(t.entry.offer)).toLowerCase()));
+  if (marketIds.size !== 1) throw new Error("sweep spans multiple markets");
+  const marketId = [...marketIds][0] as Hex;
+  const seen = new Set<string>(), entries: BookEntry[] = [], backing = new Map<string, MakerBacking>();
+  let total = 0n, cost = 0n;
+  for (const t of plan.takes) {
+    const o = t.entry.offer;
+    const embedded = o as typeof o & { chainId?: bigint; bivium?: Address };
+    if ((embedded.chainId !== undefined && BigInt(embedded.chainId) !== BigInt(env.profile.chainId)) || (embedded.bivium !== undefined && embedded.bivium.toLowerCase() !== env.profile.core.toLowerCase())) throw new Error('Offer domain mismatch');
+    if (t.units <= 0n || o.buy !== (plan.side === "bid")) throw new Error("invalid units or side");
+    if (o.maker.toLowerCase() === env.account.toLowerCase()) throw new Error("SelfDeal: own offer");
+    if (env.block.timestamp < o.start || env.block.timestamp > o.expiry) throw new Error("offer outside start/expiry window");
+    const commitment = adapter.offerCommitment(env.profile, o);
+    if (commitment.toLowerCase() !== t.entry.commitment.toLowerCase() || seen.has(commitment)) throw new Error("invalid or duplicate commitment");
+    seen.add(commitment);
+    if (![env.profile.signatureRatifier, env.profile.setterRatifier].some(r => r?.toLowerCase() === o.ratifier.toLowerCase())) throw new Error("Unsupported ratifier");
+    if (await core('isRatifier', [o.maker, o.ratifier]) !== true) throw new Error("Unregistered ratifier");
+    const args = [...adapter.ratifierArgs(o.maker, t.units, commitment, t.entry.signature)];
+    if (env.profile.abiProfile === 'core-v2') args[1] = env.taker ?? env.account;
+    if (await read(o.ratifier, adapter.ratifierAbi, 'isRatified', args) !== RATIFIED) throw new Error("ratifier precheck did not return RATIFIED");
+    const entry = entryFromSignedOffer(o, commitment, t.entry.signature);
+    entry.consumed = await core<bigint>('consumed', [o.maker, o.group]);
+    entry.size = t.units;
+    entries.push(entry);
+    const key = makerBackingKey(entry);
+    if (!backing.has(key)) backing.set(key, {
+      liquidity: o.buy ? await core<bigint>('liquidityOf', [marketId, o.maker]) : 0n,
+      credit: !o.buy ? await core<bigint>('creditOf', [marketId, o.maker]) : 0n,
+      escrow: !o.buy ? await core<bigint>('collateralEscrowOf', [marketId, o.maker]) : 0n,
+    });
+    total += t.units; cost += fillCost(o, t.units, entry.price);
+  }
+  if (total !== plan.totalUnits || cost !== plan.totalCost) throw new Error("plan totals mismatch");
+  const checked = planSweepByFace(entries, total, backing);
+  if (checked.takes.length !== entries.length || checked.takes.some((t,i) => t.units !== plan.takes[i].units)) throw new Error("insufficient shared capacity or maker backing");
+  if (plan.side === 'ask' && env.block.timestamp >= entries[0].offer.maturity) {
+    const credits = new Map([...backing].map(([k,v]) => [k,v.credit]));
+    for (const e of entries) { const k=makerBackingKey(e), c=credits.get(k)!; if(c<e.size)throw new Error('MaturityPassed: ask would originate');credits.set(k,c-e.size); }
+  }
+  const credit = await core<bigint>('creditOf', [marketId, env.account]);
+  if (plan.side === 'bid') {
+    if (env.mode === 'borrow') {
+      if (credit !== 0n) throw new Error('Borrow requires zero existing credit to guarantee full new debt');
+      if (env.block.timestamp >= entries[0].offer.maturity) throw new Error('MaturityPassed: borrow');
+    } else if (credit < total) throw new Error('Insufficient taker credit: fill would originate new debt');
+  }
+  return { marketId, keyState: { reads: state, orders: entries, backing: [...backing], matured: env.block.timestamp >= entries[0].offer.maturity }, credit };
 }

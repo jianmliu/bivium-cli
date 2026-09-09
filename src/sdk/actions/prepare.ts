@@ -6,6 +6,7 @@ import type { ActionIntent, ActionEvaluation } from './preview.ts';
 import { basicCall, type BasicAction } from './calls.ts';
 import { amount, tokenDecimals } from './reads.ts';
 import { ActionError, type UnsignedTx } from './types.ts';
+import { evaluateTradeAction } from './tradePrepare.ts';
 const MAX = (1n << 256n)-1n;
 function units(value:string|undefined,decimals:number):bigint {
  if(!value || !/^\d+(\.\d+)?$/.test(value))throw new ActionError('INVALID_ARGUMENT','Amount must be a positive decimal string');
@@ -18,7 +19,7 @@ function units(value:string|undefined,decimals:number):bigint {
 export async function evaluateAction(context:ActionContext,intent:ActionIntent,ctx:ReadContext):Promise<ActionEvaluation>{
  context.requireExecutable();
  const actions:BasicAction[]=['fund','repay','withdraw_liquidity','withdraw_collateral','claim','escrow_collateral','withdraw_collateral_escrow'];
- if(!actions.includes(intent.action as BasicAction))throw new ActionError('UNSUPPORTED_ACTION','Action requires a supported basic operation');
+ if(!actions.includes(intent.action as BasicAction))return evaluateTradeAction(context,intent,ctx);
  if(!isAddress(intent.account)||!isAddress(intent.receiver)||intent.account.toLowerCase()!==ctx.account.toLowerCase()||ctx.chainId!==context.profile.chainId||ctx.core.toLowerCase()!==context.profile.core.toLowerCase())throw new ActionError('DOMAIN_MISMATCH','Account or deployment mismatch');
  if(ctx.snapshot.coverage!=='complete')throw new ActionError('UPSTREAM_UNAVAILABLE','Relevant snapshot must be complete',true);
  const action=intent.action as BasicAction, market=await context.market(intent.marketId,ctx.signal), p=market.params;
