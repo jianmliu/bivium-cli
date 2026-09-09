@@ -67,3 +67,10 @@ test("one assets bid cannot claim a bound from one fill's rounding", () => {
   assert.equal(result.decision, 'incomplete');
   assert.equal(result.fragmentedFillRisk, true);
 });
+test('known future-start orders remain inventory exposure', () => {
+  const future = entryFromSignedOffer({ ...offer, start: 1100n, maxUnits: 40n, group: '0x99' }, '0x99', '0x');
+  const current = entryFromSignedOffer({ ...offer, maxUnits: 40n }, '0x1', '0x');
+  const result = previewMarketMaking({ ...input, existingOrders: [future], candidateOrders: [current] });
+  assert.equal(result.scenarios[1].credit,180n);
+  assert.equal(result.decision,'reject');
+});

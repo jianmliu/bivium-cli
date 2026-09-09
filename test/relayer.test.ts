@@ -207,3 +207,11 @@ test("relayer surface is core-v2 only (17-field wire offers)", async () => {
     /core-v2/,
   );
 });
+test('inventory retrieval retains future-start signed offers', async () => {
+  const offer = {...makeAskOffer(4032n, G1),start:now+100n};
+  await publishSignedOffer(domain,offer,await signOffer(offer));
+  const normal = await fetchRelayerBook(domain,marketParamsFromOffer(offer),{nowSec:now});
+  assert.ok(normal.ok);assert.equal(normal.entries.length,0);
+  const inventory = await fetchRelayerBook(domain,marketParamsFromOffer(offer),{nowSec:now,includeUnexpired:true});
+  assert.ok(inventory.ok);assert.equal(inventory.entries.length,1);
+});

@@ -28,3 +28,7 @@ test("different settlement claims and self trades cannot masquerade as arbitrage
 test("fee inclusive adapters must explicitly normalize rather than deduct twice", () => {
   assert.throws(() => previewArbitrage({ entry: { ...leg, feesIncluded: true }, exit: leg, fees: 2n, gasBudget: 1n, minProfit: 0n }), /normalize/);
 });
+test('simulation without an onchain profit constraint remains an estimate', () => {
+  const input = {entry:leg,exit:{...leg,amount:106n},fees:2n,gasBudget:1n,minProfit:0n};
+  assert.equal(previewArbitrage({...input,atomicVerification:{programHash:'0x1',simulated:true,onchainProfitFloor:null}}).kind,'estimated_spread');
+});

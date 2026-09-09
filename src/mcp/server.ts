@@ -364,8 +364,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const journalPath = journalIndex >= 0 ? argv[journalIndex + 1] : join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "bivium", "mcp", `${profile.chainId}-${profile.core.toLowerCase()}`);
   if (!journalPath) throw new Error("--journal-dir requires a path");
   const journal = new PublishJournal(resolve(journalPath));
+  let stopping = false;
+  // Stop accepting input, then allow the bounded in-flight operation to settle before unlocking.
+  const stop = () => { stopping = true; process.stdin.destroy(); };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
   try { await serveStdio({ profile, client: new BiviumClient(profile), policies, journal, allowRelayerWrites: argv.includes("--allow-relayer-writes") }); }
-  finally { journal.close(); }
+  catch (error) { if (!stopping) throw error; }
+  finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); journal.close(); }
 }
 
 if (process.argv[1] && /server\.(ts|js|mjs)$/.test(process.argv[1])) {

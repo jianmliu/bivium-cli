@@ -16,6 +16,6 @@ export function previewArbitrage(input: { entry: CandidateLeg; exit: CandidateLe
   const unknowns = [fees === null ? "fees" : null, gasBudget === null ? "gas_budget_in_numeraire" : null, !entry.depthKnown || !exit.depthKnown ? "executable_depth" : null, !entry.executionPriceKnown || !exit.executionPriceKnown ? "execution_price" : null].filter((x): x is string => x !== null);
   const netProfitLowerBound = unknowns.length ? null : netAfterCosts(exit.amount, entry.amount, fees!, gasBudget!);
   const atomic = input.atomicVerification;
-  const kind: OpportunityKind = atomic?.simulated && atomic.programHash ? "atomic_candidate" : "estimated_spread";
+  const kind: OpportunityKind = atomic?.simulated && atomic.programHash && atomic.onchainProfitFloor !== null && atomic.onchainProfitFloor >= 0n ? "atomic_candidate" : "estimated_spread";
   return { kind, token: entry.token, entry: entry.amount, proceeds: exit.amount, fees, gasBudget, netProfitLowerBound, meetsThreshold: netProfitLowerBound !== null && netProfitLowerBound >= input.minProfit, unknowns, onchainProfitFloor: kind === "atomic_candidate" ? atomic!.onchainProfitFloor : null, guaranteedProfit: false, limitations: ["Computed profit is conditional on quoted legs, declared costs and gas budget; gas is not a guaranteed cost.", "Without a verified single transaction and onchain profit constraint, this remains an estimate with leg execution risk."] };
 }

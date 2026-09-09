@@ -194,7 +194,7 @@ function reviveRow(raw: unknown, domain: RelayerDomain, params: MarketParams): B
 export async function fetchRelayerBook(
   domain: RelayerDomain,
   params: MarketParams,
-  { timeoutMs = 8_000, nowSec = BigInt(Math.floor(Date.now() / 1000)), signal }: { timeoutMs?: number; nowSec?: bigint; signal?: AbortSignal } = {},
+  { timeoutMs = 8_000, nowSec = BigInt(Math.floor(Date.now() / 1000)), signal, includeUnexpired = false }: { timeoutMs?: number; nowSec?: bigint; signal?: AbortSignal; includeUnexpired?: boolean } = {},
 ): Promise<RelayerBookResult> {
   requireRelayerV2(domain.abiProfile);
   const q = new URLSearchParams({
@@ -221,7 +221,7 @@ export async function fetchRelayerBook(
       // One bad row poisons the WHOLE batch: a relayer that serves garbage cannot be trusted to
       // have served the good rows completely either.
       if (entry === null) return { ok: false, reason: "relayer served a malformed or mismatched row" };
-      if (!offerActiveAt(entry.offer, nowSec)) continue;
+      if (includeUnexpired ? entry.offer.expiry < nowSec : !offerActiveAt(entry.offer, nowSec)) continue;
       entries.push(entry);
     }
     return { ok: true, entries };
