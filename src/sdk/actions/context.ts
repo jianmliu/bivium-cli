@@ -20,6 +20,8 @@ export interface ActionContextOptions {
   rpc?: ActionRpc;
   markets?: (signal?: AbortSignal) => Promise<DiscoveredMarket[]>;
   now?: () => number;
+  /** Host-side test/runtime budget; no tool argument can raise this deadline. */
+  rpcTimeoutMs?: number;
 }
 export type ReadContext = {
   chainId: number; core: Address; account: Address;
@@ -43,7 +45,11 @@ export class ActionContext {
     this.rpc = options.rpc ?? this.rpcFor();
   }
   private rpcFor(signal?: AbortSignal): ActionRpc {
-    return createPublicClient({ transport: http(this.profile.rpcUrl, { timeout: 8_000, retryCount: 0, fetchOptions: { signal } }) }) as unknown as ActionRpc;
+    const timeout = this.options.rpcTimeoutMs ?? 8_000;
+    return createPublicClient({ transport: http(this.profile.rpcUrl, {
+      timeout, retryCount: 0,
+      fetchFn: (input, init) => fetch(input, { ...init, signal: AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : []), ...(init?.signal ? [init.signal] : [])]) }),
+    }) }) as unknown as ActionRpc;
   }
   async limited<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();

@@ -176,12 +176,13 @@ export function createStrategyMcp(deps: McpDeps) {
       case "market_list": {
         const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n })));
         const filters = (args.filters ?? {}) as Record<string, unknown>;
+        const collection = createHash("sha256").update(JSON.stringify(rows.map((row) => row.market.id.toLowerCase()))).digest("hex");
         const binding = createHash("sha256").update(JSON.stringify([profile.chainId, profile.core.toLowerCase(), profile.abiProfile, args.source ?? null, args.fromBlock ?? null, args.chunkBlocks ?? null, ...["maturity", "loanToken", "collateralToken", "gate", "allowPartialRepay"].map((key) => typeof filters[key] === "string" ? String(filters[key]).toLowerCase() : filters[key] ?? null)])).digest("hex");
         let offset = 0;
         if (args.cursor) {
           try {
             const decoded = JSON.parse(Buffer.from(String(args.cursor), "base64url").toString());
-            if (decoded.binding !== binding || !Number.isSafeInteger(decoded.offset) || decoded.offset < 0) throw new Error();
+            if (decoded.binding !== binding || decoded.collection !== collection || !Number.isSafeInteger(decoded.offset) || decoded.offset < 0) throw new Error();
             offset = decoded.offset;
           } catch { throw new ActionError("INVALID_ARGUMENT", "Invalid cursor for deployment/filter"); }
         }
@@ -190,7 +191,7 @@ export function createStrategyMcp(deps: McpDeps) {
         const page = filtered.slice(offset, offset + limit);
         return {
           count: filtered.length,
-          nextCursor: offset + limit < filtered.length ? Buffer.from(JSON.stringify({ binding, offset: offset + limit })).toString("base64url") : null,
+          nextCursor: offset + limit < filtered.length ? Buffer.from(JSON.stringify({ binding, collection, offset: offset + limit })).toString("base64url") : null,
           coverage: "partial",
           source: args.source ?? (profile.relayerUrl ? "relayer" : "chain"),
           markets: page.map((r) => {

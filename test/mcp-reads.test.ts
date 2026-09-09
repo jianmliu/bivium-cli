@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createServer } from "node:http";
 import { adapterFor } from "../src/sdk/lineage.ts";
 import { ZERO_ADDRESS, type DeploymentProfile, type MarketParams } from "../src/sdk/types.ts";
 import { ActionContext, type ActionRpc } from "../src/sdk/actions/context.ts";
@@ -77,6 +78,8 @@ test("MCP reads are available through registry and list cursor is bound to domai
   const next = await mcp.callTool("market_list", { limit: 1, cursor: page.nextCursor }) as any;
   assert.equal(next.markets[0].maturity, 3000n);
   await assert.rejects(mcp.callTool("market_list", { limit: 1, cursor: page.nextCursor, filters: { maturity: "2000" } }), /cursor/);
+  rows.unshift({ ...rows[0], market: { ...market, id: hash } });
+  await assert.rejects(mcp.callTool("market_list", { limit: 1, cursor: page.nextCursor }), /cursor/);
 });
 test("bounded chain discovery rejects an oversized scan before querying logs", async () => {
   const client = { profile, verifyProfile: async () => {}, pub: { getBlockNumber: async () => 100_000n, getLogs: async () => { throw new Error("must not query logs"); } } };
@@ -129,4 +132,18 @@ test("partial index resolution failure does not discard a resolved account marke
   assert.equal(response.data.markets[0].credit!.raw, "10");
   assert.equal(response.data.markets[1].credit, null);
   assert.equal(loads, 2);
+});
+test("real RPC transport enforces upstream timeout even with a parent signal", async () => {
+  const server = createServer(() => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const parent = new AbortController();
+  const context = new ActionContext({ profile: { ...profile, rpcUrl: `http://127.0.0.1:${port}` }, rpcTimeoutMs: 25 });
+  const fallback = setTimeout(() => parent.abort(), 1000);
+  const start = Date.now();
+  try {
+    await assert.rejects(context.pin(address(6), parent.signal), /UPSTREAM_UNAVAILABLE/);
+    assert.ok(Date.now() - start < 500, "upstream deadline must not wait for parent abort");
+    assert.equal(parent.signal.aborted, false);
+  } finally { clearTimeout(fallback); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
