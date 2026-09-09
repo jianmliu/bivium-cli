@@ -258,7 +258,7 @@ test("the pool price prices both directions and takes its fee off the input", ()
 test("a swap floor prefers what the caller said, then depth, then the pool's price — and refuses to guess", async () => {
   const call = async () => "0x" as Hex;
   const explicit = await swapFloor({ call, key: POOL, tokenIn: MNVDA, amountIn: 1n, slippageBps: 100, explicit: 42n });
-  assert.deepEqual(explicit, { minOut: 42n, source: "explicit", estimate: 42n, slippageBps: 0 });
+  assert.deepEqual(explicit, { minOut: 42n, source: "explicit", estimate: 42n, slippageBps: 0, impactBps: 0 });
 
   // The Quoter answers: depth-aware, and the slippage is cut off ITS number.
   const quoted = await swapFloor({
@@ -269,12 +269,26 @@ test("a swap floor prefers what the caller said, then depth, then the pool's pri
   assert.equal(quoted.estimate, 1000n);
   assert.equal(quoted.minOut, 990n, "100 bps off the quote");
 
-  // No Quoter, but a StateView with a live price: marginal, and it says so.
+  // No Quoter, but a StateView. With liquidity in range the trade is priced against that DEPTH — the step this
+  // test has always been named for — and the floor is cut off what the pool would really pay.
+  const word = (value: bigint) => (`0x${value.toString(16).padStart(64, "0")}`) as Hex;
+  const stateView = (liquidity: bigint) => async (_to: Address, data: Hex) =>
+    (data.startsWith("0xc815641c") ? word(2n ** 96n) : word(liquidity));
+  const deep = await swapFloor({
+    call: stateView(10n ** 24n),
+    key: POOL, tokenIn: POOL.currency0, amountIn: 1_000_000n, slippageBps: 100, stateView: CORE,
+  });
+  assert.equal(deep.source, "pool-depth");
+  assert.equal(deep.minOut, (deep.estimate * 9_900n) / 10_000n);
+  assert.ok(deep.impactBps >= 0);
+
+  // A pool with nothing in range still has a price, and that is all it has: marginal, and it says so.
   const priced = await swapFloor({
-    call: async () => (`0x${(2n ** 96n).toString(16).padStart(64, "0")}`) as Hex,
+    call: stateView(0n),
     key: POOL, tokenIn: POOL.currency0, amountIn: 1_000_000n, slippageBps: 100, stateView: CORE,
   });
   assert.equal(priced.source, "pool-price");
+  assert.equal(priced.impactBps, 0);
   assert.equal(priced.minOut, (priced.estimate * 9_900n) / 10_000n);
 
   // Nothing to price it with is a refusal, not a zero floor.
