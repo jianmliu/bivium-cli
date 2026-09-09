@@ -1,0 +1,13 @@
+import { privateKeyToAccount } from 'viem/accounts';
+import { RATIFIED } from '../../src/sdk/ratify.ts';
+import { ActionContext } from '../../src/sdk/actions/context.ts';
+import { ActionService } from '../../src/sdk/actions/preview.ts';
+import { OrderService } from '../../src/sdk/actions/orders.ts';
+import { adapterFor } from '../../src/sdk/lineage.ts';
+import { ZERO_ADDRESS, type DeploymentProfile } from '../../src/sdk/types.ts';
+export const maker=privateKeyToAccount(`0x${'11'.repeat(32)}`);
+export const profile:DeploymentProfile={name:'fixture',chainId:46630,abiProfile:'core-v2',core:`0x${'01'.repeat(20)}`,signatureRatifier:`0x${'02'.repeat(20)}`,setterRatifier:`0x${'03'.repeat(20)}`,rpcUrl:'http://localhost:1',relayerUrl:'http://localhost:1'};
+const params={loanToken:maker.address,collateralToken:profile.core,maturity:100000n,strike:10n**36n,gate:ZERO_ADDRESS,allowPartialRepay:true};
+export const adapter=adapterFor('core-v2'),marketId=adapter.computeMarketId(profile,params);
+export const intent={marketId,account:maker.address,side:'bid' as const,maxUnits:'10',tick:'4000',expiry:'2000',group:{mode:'independent' as const},policyId:'test',collateralKind:'other' as const,evidence:{},ratifierKind:'signature' as const};
+export function fixture(){let contract=false,credit=100n,escrow=0n;const calls:any[]=[];const context=new ActionContext({profile,markets:async()=>[{id:marketId,params,firstSeenBlock:1n}],now:()=>1000000,book:async()=>({entries:[],source:'fixture',coverage:'complete'}),rpc:{getChainId:async()=>46630,getBlock:async()=>({number:1n,hash:`0x${'04'.repeat(32)}`,timestamp:1000n}),getBytecode:async()=>contract?'0x1234':undefined,simulateContract:async r=>{calls.push(r);return{};},readContract:async r=>{if(r.functionName==='computeId')return adapter.computeMarketId(profile,r.args![0] as any);if(r.functionName==='hashOffer')return adapter.offerCommitment(profile,r.args![0] as any);if(r.functionName==='isRatifier')return true;if(r.functionName==='isRatified')return RATIFIED;if(r.functionName==='position')return{debt:0n,collateral:0n,collateralWithdrawable:0n};if(r.functionName==='creditOf')return credit;if(r.functionName==='collateralEscrowOf')return escrow;if(r.functionName==='consumed')return 0n;return 100n;}}});const actions=new ActionService(context,{test:{source:'user-policy',rules:{rejectArbitraryMint:true,rejectUnsellable:true,confirmOnUnknown:false},inventory:{[marketId]:{maxCredit:'2000',maxNewDebt:'0',minCash:'0',maxCommittedLoan:'1000',maxLoss:'1000',allowOrigination:false}}} as any});return{context,actions,calls,service:new OrderService(context,actions),contract:()=>{contract=true;},noCredit:()=>{credit=0n;},escrow:()=>{escrow=1n;}};}

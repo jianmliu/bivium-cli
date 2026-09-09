@@ -17,22 +17,23 @@ export const CAP_WITHDRAW_COLLATERAL = 1n << 3n;
 /// What a program that borrows, repays or withdraws needs. An ask-only program needs none of it.
 export const PROGRAM_CAPS = CAP_FILL | CAP_WITHDRAW_COLLATERAL;
 
-const gateAbi = parseAbi([
+export const gateAbi = parseAbi([
   "function routers() view returns (address[])",
   "function LENDER_MUST_ROUTE() view returns (bool)",
 ]);
 
-const routerAbi = parseAbi([
+export const routerAbi = parseAbi([
   "struct Leg { uint8 kind; bytes data; }",
   "function execute(Leg[] program, uint256 deadline) returns (uint256[])",
   "function quoteLeg(uint256 units, uint256 cost) view returns (uint256 fee, uint256 principalAfterFee)",
   "function FEE_BPS() view returns (uint256)",
   "function LENDER_FEE_BPS() view returns (uint256)",
   "function FEE_RECIPIENT() view returns (address)",
+  "function BIVIUM() view returns (address)",
   "function MAX_LEGS() view returns (uint256)",
 ]);
 
-const grantAbi = parseAbi([
+export const grantAbi = parseAbi([
   "function grantOf(address authorizer, address authorized) view returns (uint256 capabilities, uint256 expiry)",
   "function grantAuthorization(address authorized, uint256 capabilities, uint256 expiry)",
 ]);

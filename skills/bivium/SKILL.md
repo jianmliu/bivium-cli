@@ -413,8 +413,10 @@ empty one of a single-offer root and it will not fill. `--off` on the same files
 ### The MCP twin (`bivium-mcp`)
 
 The same engine is exposed as MCP tools over stdio for agents that prefer tool calls to shelling
-out — READ-ONLY by design (list, discover, quote, plan); execution stays with the CLI under the
-user's key. Register it in the client's MCP config:
+out. It provides reads, risk/inventory previews and unsigned preparation, with optional host-enabled
+relayer publication. It never signs or broadcasts onchain transactions. Read [MCP workflows](references/mcp.md)
+before lending, cold-start market making, publication or cancellation. An incomplete inventory preview
+is not account-wide safety, and missing MCP capabilities permit only CLI preview fallback. Register it in the client's MCP config:
 
 ```json
 { "mcpServers": { "bivium-strategies": { "command": "npx", "args": ["--prefix", "<bivium-cli>", "bivium-mcp"],

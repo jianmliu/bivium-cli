@@ -38,7 +38,7 @@ test("mcp: handshake + tools/list", async () => {
   assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null);
   const list = await mcp.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.deepEqual((list!.result as { tools: { name: string }[] }).tools.map((t) => t.name), TOOLS.map((t) => t.name));
-  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan", "strategy_positions"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["strategy_list", "market_list", "strategy_quote", "strategy_plan", "strategy_positions", "server_info", "market_details", "book_snapshot", "account_snapshot", "order_status", "transaction_status", "risk_assess", "action_preview", "action_prepare", "order_prepare", "order_publish", "order_cancel_prepare", "order_delist", "mm_preview", "arbitrage_preview"]);
   const unknown = await mcp.handle({ jsonrpc: "2.0", id: 3, method: "nope" });
   assert.equal(unknown!.error!.code, -32601);
 });
@@ -57,13 +57,13 @@ test("mcp: strategy_quote returns the confirm-screen numbers; strategy_plan adds
   assert.equal(q.quote.prepay, "966002800");
   assert.equal(q.quote.payoff.worstCase.form, "forfeit-collateral");
   assert.ok(q.quote.exerciseProbability > 0.33 && q.quote.exerciseProbability < 0.36);
-  const p = parsed(await call(7, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: Number(MATURITY), bufferPct: 48, aprBps: 1200, minOut: "900" }));
+  const p = parsed(await call(7, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: Number(MATURITY), bufferPct: 48, aprBps: "1200", minOut: "900" }));
   assert.equal(p.plan.mode, "sequential");
   assert.equal(p.plan.limits.maxLoss, p.quote.prepay);
 });
 
 test("mcp: tool-level failures are isError results, not protocol errors", async () => {
-  const r = await call(8, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: String(MATURITY), bufferPct: 48, aprBps: 1200 }); // no minOut
+  const r = await call(8, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: String(MATURITY), bufferPct: 48, aprBps: "1200" }); // no minOut
   const res = r!.result as { isError?: boolean; content: { text: string }[] };
   assert.equal(res.isError, true);
   assert.match(res.content[0]!.text, /minOut is required/);

@@ -124,7 +124,7 @@ separate. Core remains administrator-free and fee-free; optional gated series re
 own origination routes. The fee-inclusive program preview determines execution bounds; an
 indicative payoff quote is not automatically net of every cost.
 
-### Read-only MCP twin
+### MCP: reads, unsigned preparation and optional relayer publication
 
 `bivium-mcp` exposes the shared strategy engine over MCP stdio for clients that prefer tool calls:
 
@@ -140,11 +140,43 @@ indicative payoff quote is not automatically net of every cost.
 }
 ```
 
-Its tools are `strategy_list`, `market_list`, `strategy_quote`, and `strategy_plan`. They list,
-discover, quote, and plan only; tool failures are returned as errors rather than being treated as
-empty market data. The MCP server has no transaction execution or signing tool. Robinhood Chain
-mainnet `4663` remains identity/reference-only: neither the CLI strategy surface nor this MCP
-surface implies permission to construct, sign, submit, or execute a mainnet write.
+The MCP server has no transaction execution or signing tool. It prepares unsigned wallet payloads;
+optional relayer writes require `--allow-relayer-writes` and a persistent journal. Robinhood Chain
+mainnet `4663` remains identity/reference-only. Executable preparation is testnet `46630`, core-v2.
+
+| Tools | Purpose |
+|---|---|
+| `strategy_list`, `market_list`, `strategy_quote`, `strategy_plan`, `strategy_positions` | Compatible strategy discovery and descriptive planning |
+| `server_info`, `market_details`, `book_snapshot`, `account_snapshot`, `order_status`, `transaction_status` | Deployment, block-pinned reads and explicit coverage |
+| `risk_assess`, `action_preview`, `action_prepare` | Host policy, expiring exact-intent preview, revalidation and public simulation |
+| `order_prepare`, `order_publish`, `order_cancel_prepare`, `order_delist` | External signing, opt-in publication and scoped cancellation |
+| `mm_preview`, `arbitrage_preview` | Known-inventory stress and explicit candidate spread analysis |
+
+```sh
+bivium-mcp --profile /path/to/robinhood-testnet.json --policy-file /path/to/policies.json --journal-dir /path/to/journal
+```
+
+Policy files map IDs to `{source, rules, inventory?}`. `source` is `user-policy` or `agent-policy`;
+`rules` contains `rejectArbitraryMint`, `rejectUnsellable`, `confirmOnUnknown` and optional
+`maxTop10HolderPct` / `maxExitSlippageBps`. `inventory` maps canonical market IDs to raw integer-string
+`maxCredit`, `maxNewDebt`, `minCash`, `maxCommittedLoan`, `maxLoss`, boolean `allowOrigination`, and optional
+`requireDailyLossAccounting`. No policy means no executable risk acceptance. Basic action amounts are
+human decimal strings; trade fills, caps and inventory budgets use raw token units. Tool schemas are authoritative.
+
+The default journal lives under `$XDG_STATE_HOME/bivium/mcp/<chain>-<core>` or
+`~/.local/state/bivium/mcp/<chain>-<core>`. It allows one writer and retains up to 1,000 records without
+automatic eviction. A stale lock requires host recovery after verifying the writer is stopped.
+Publication timeouts retain the exact signed payload as `submission_unknown`; retry the same prepareId.
+Delisting is advisory and does not cancel the onchain signature.
+
+Snapshots never reserve funds. Missing external orders prevent account-wide safety claims. MM includes
+single-sided fills, shared groups and additional stress cases; unresolved partial-fill rounding yields
+`incomplete`. There is no daily realized-PnL ledger. New origination orders and pre-maturity secondary-only
+sales are currently refused where the contract cannot enforce their required bounds. Arbitrage output is
+`estimated_spread` with a null profit lower bound whenever costs or execution are unverified.
+
+See [the MCP workflow reference](skills/bivium/references/mcp.md) for lending → wallet signing,
+cold-start depth → order preparation, and publication → authoritative cancellation → delisting.
 
 ### The strategy math as a package — `@bivium/cli/strategies`
 

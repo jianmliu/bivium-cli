@@ -28,6 +28,8 @@ export interface MarketSource {
   fromBlock?: bigint;
   /** getLogs range per call for chain scans (default 900; raise it when the RPC allows wide ranges). */
   chunkSize?: bigint;
+  /** Host request budget, not a tool-controlled bypass. */
+  maxScanBlocks?: bigint;
 }
 
 /** Discovered markets — the same sources as `market list`. A down index is an error, not an empty set. */
@@ -46,7 +48,7 @@ export async function loadDiscoveredMarkets(
   if (!client) throw new Error("a chain scan needs a BiviumClient");
   const fromBlock = opts.fromBlock ?? (profile.coreDeploymentBlock === undefined ? undefined : BigInt(profile.coreDeploymentBlock));
   if (fromBlock === undefined) throw new Error("profile has no coreDeploymentBlock — pass fromBlock");
-  return await discoverMarketsOnChain(client, { fromBlock, chunkSize: opts.chunkSize });
+  return await discoverMarketsOnChain(client, { fromBlock, chunkSize: opts.chunkSize, maxScanBlocks: opts.maxScanBlocks });
 }
 
 /** Decorate markets with profile symbols/decimals (unknown tokens: exact decimals from the chain). */

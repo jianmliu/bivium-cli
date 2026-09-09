@@ -88,6 +88,7 @@ function reviveUint(value: unknown): bigint | null {
 
 const isBytes32 = (value: unknown): value is Hex => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
 const isSignature = (value: unknown): value is Hex => typeof value === "string" && /^0x[0-9a-fA-F]{130}$/.test(value);
+const isRatifierData = (value: unknown): value is Hex => typeof value === "string" && value.length <= 16_386 && /^0x(?:[0-9a-fA-F]{2})*$/.test(value);
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 /**
@@ -111,7 +112,7 @@ function reviveRow(raw: unknown, domain: RelayerDomain, params: MarketParams): B
     chainId === null || chainId === 0n || bivium === null || loanToken === null ||
     collateralToken === null || gate === null || maker === null || ratifier === null ||
     typeof s.allowPartialRepay !== "boolean" || typeof s.buy !== "boolean" ||
-    !isBytes32(s.group) || !isSignature(raw.signature) || !isBytes32(raw.commitment)
+    !isBytes32(s.group) || !isRatifierData(raw.signature) || !isBytes32(raw.commitment)
   ) {
     return null;
   }
@@ -193,7 +194,7 @@ function reviveRow(raw: unknown, domain: RelayerDomain, params: MarketParams): B
 export async function fetchRelayerBook(
   domain: RelayerDomain,
   params: MarketParams,
-  { timeoutMs = 8_000, nowSec = BigInt(Math.floor(Date.now() / 1000)) }: { timeoutMs?: number; nowSec?: bigint } = {},
+  { timeoutMs = 8_000, nowSec = BigInt(Math.floor(Date.now() / 1000)), signal, includeUnexpired = false }: { timeoutMs?: number; nowSec?: bigint; signal?: AbortSignal; includeUnexpired?: boolean } = {},
 ): Promise<RelayerBookResult> {
   requireRelayerV2(domain.abiProfile);
   const q = new URLSearchParams({
@@ -210,7 +211,7 @@ export async function fetchRelayerBook(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${offersUrl(domain.relayerUrl)}?${q}`, { signal: controller.signal });
+    const res = await fetch(`${offersUrl(domain.relayerUrl)}?${q}`, { signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal });
     if (!res.ok) return { ok: false, reason: `relayer responded ${res.status}` };
     const raw: unknown = await res.json();
     if (!Array.isArray(raw)) return { ok: false, reason: "relayer response is not an offer array" };
@@ -220,7 +221,7 @@ export async function fetchRelayerBook(
       // One bad row poisons the WHOLE batch: a relayer that serves garbage cannot be trusted to
       // have served the good rows completely either.
       if (entry === null) return { ok: false, reason: "relayer served a malformed or mismatched row" };
-      if (!offerActiveAt(entry.offer, nowSec)) continue;
+      if (includeUnexpired ? entry.offer.expiry < nowSec : !offerActiveAt(entry.offer, nowSec)) continue;
       entries.push(entry);
     }
     return { ok: true, entries };

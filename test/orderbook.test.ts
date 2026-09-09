@@ -47,7 +47,7 @@ function makeOffer(side: "ask" | "bid", tick: bigint, maker: string, maxUnits = 
 
 function clob(side: "ask" | "bid", tick: bigint, maker: string): BookEntry {
   const offer = makeOffer(side, tick, maker);
-  return { side, offer, signature: SIG, commitment: GROUP, price: tickToPrice(tick), size: 1000n, maker: maker as Address };
+  return { side, offer, signature: SIG, commitment: `0x${side}${tick}${maker}` as Hex, price: tickToPrice(tick), size: 1000n, maker: maker as Address };
 }
 
 function sizedAsk(tick: bigint, size: bigint, maker: string): BookEntry {
@@ -62,7 +62,7 @@ test("entryFromSignedOffer tags the side from buy and sizes from the caps", () =
   assert.equal(ask.price, tickToPrice(3000n));
   const bid = entryFromSignedOffer(makeOffer("bid", 2900n, "0xa".padEnd(42, "0"), 0n, 1000n * WAD), GROUP, SIG);
   assert.equal(bid.side, "bid");
-  assert.equal(bid.size, (1000n * WAD * WAD) / tickToPrice(2900n));
+  assert.equal(bid.size, ((1000n * WAD + 1n) * WAD - 1n) / tickToPrice(2900n));
 });
 
 test("sortSide: best ask = lowest price, best bid = highest price", () => {
@@ -83,7 +83,7 @@ test("offerCap + remainingFace: assets-capped bid vs units-capped ask (frontend 
   assert.equal(offerCap(bid), 1000n * WAD);
   assert.equal(offerCap(ask), 500n);
   const price = tickToPrice(2900n);
-  assert.equal(remainingFace(bid, 500n * WAD, price), (500n * WAD * WAD) / price);
+  assert.equal(remainingFace(bid, 500n * WAD, price), ((500n * WAD + 1n) * WAD - 1n) / price);
   assert.equal(remainingFace(ask, 200n, price), 300n);
   assert.equal(remainingFace(ask, 500n, price), 0n);
 });
@@ -117,7 +117,7 @@ test("reconcileConsumedEntries derives live assets-capped bid face from consumed
 
 test("reconcileConsumedEntries drops remaining capacity whose full face rounds to zero assets", () => {
   const base = clob("bid", 2900n, "0xa");
-  const dust: BookEntry = { ...base, offer: { ...base.offer, maxUnits: 0n, maxAssets: 1n }, size: 0n };
+  const dust: BookEntry = { ...base, offer: { ...base.offer, maxUnits: 1n, maxAssets: 0n }, size: 0n };
   assert.ok(remainingFace(dust.offer, 0n, dust.price) > 0n);
   assert.deepEqual(reconcileConsumedEntries([dust], [0n]), { ready: true, entries: [] });
 });

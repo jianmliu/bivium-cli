@@ -98,3 +98,11 @@ test("the distributable skill and the repo-local skill are the same file", () =>
     assert.match(readme, retainedReference, `README must retain ${retainedReference}`);
   }
 });
+
+test('MCP workflow reference ships and stays synchronized', () => {
+  const dist = readFileSync(new URL('../skills/bivium/references/mcp.md', import.meta.url), 'utf8');
+  const local = readFileSync(new URL('../.claude/skills/bivium/references/mcp.md', import.meta.url), 'utf8');
+  assert.equal(dist, local);
+  for (const text of ['action_preview', 'action_prepare', 'mm_preview', 'order_prepare', 'submission_unknown', 'order_cancel_prepare', 'order_delist', 'netProfitLowerBound=null', 'maxTopUp', 'raw integer strings']) assert.ok(dist.includes(text), text);
+  assert.ok(readFileSync(new URL('../skills/bivium/SKILL.md', import.meta.url), 'utf8').includes('(references/mcp.md)'));
+});

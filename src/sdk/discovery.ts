@@ -20,6 +20,7 @@ export interface DiscoveredMarket {
   id: Hex;
   params: MarketParams;
   firstSeenBlock: bigint;
+  discovery?: { source: string; observedAt: string; confirmedThrough: string | null; coverage: "complete" | "partial" | "unknown"; stale: boolean | null };
 }
 
 /**
@@ -44,14 +45,16 @@ export function verifyTouchedMarket(
 /** Chunked MarketTouched scan straight from the chain — lineage-correct by construction. */
 export async function discoverMarketsOnChain(
   client: BiviumClient,
-  options: { fromBlock: bigint; chunkSize?: bigint },
+  options: { fromBlock: bigint; chunkSize?: bigint; maxScanBlocks?: bigint },
 ): Promise<DiscoveredMarket[]> {
   await client.verifyProfile();
   const profile = client.profile;
   const eventAbi = profile.abiProfile === "core-v1" ? touchedEventV1 : touchedEventV2;
   const event = eventAbi.find((item) => item.type === "event");
   const chunk = options.chunkSize ?? 900n;
+  if (chunk <= 0n) throw new Error("chunkSize must be positive");
   const latest = await client.pub.getBlockNumber();
+  if (options.maxScanBlocks !== undefined && latest - options.fromBlock + 1n > options.maxScanBlocks) throw new Error(`chain scan exceeds ${options.maxScanBlocks} block request budget; narrow fromBlock or use the index`);
   const markets = new Map<string, DiscoveredMarket>();
   for (let from = options.fromBlock; from <= latest; from += chunk) {
     const to = from + chunk - 1n > latest ? latest : from + chunk - 1n;
@@ -93,11 +96,12 @@ export interface RelayerMarketsResult {
 }
 
 /** GET <relayerUrl>/markets — the frontend's MarketTouched index; every row re-verified locally. */
-export async function fetchRelayerMarkets(profile: DeploymentProfile): Promise<RelayerMarketsResult> {
+export async function fetchRelayerMarkets(profile: DeploymentProfile, options: { signal?: AbortSignal } = {}): Promise<RelayerMarketsResult> {
   if (!profile.relayerUrl) return { ok: false, reason: "profile has no relayerUrl", markets: [], suspiciousEmpty: false };
   let payload: Record<string, unknown>;
   try {
-    const res = await fetch(`${profile.relayerUrl.replace(/\/$/, "")}/markets`);
+    const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000);
+    const res = await fetch(`${profile.relayerUrl.replace(/\/$/, "")}/markets`, { signal });
     if (!res.ok) return { ok: false, reason: `relayer answered ${res.status}`, markets: [], suspiciousEmpty: false };
     payload = (await res.json()) as Record<string, unknown>;
   } catch {
@@ -127,5 +131,6 @@ export async function fetchRelayerMarkets(profile: DeploymentProfile): Promise<R
     return { ok: false, reason: error instanceof Error ? error.message : String(error), markets: [], suspiciousEmpty: false };
   }
   const healthy = payload.syncing === false && payload.stale === false && payload.coverageUnknown === false;
-  return { ok: true, markets, suspiciousEmpty: healthy && markets.length === 0 };
+  const discovery = { source: `${profile.relayerUrl.replace(/\/$/, "")}/markets`, observedAt: new Date().toISOString(), confirmedThrough: typeof payload.confirmedThrough === "string" ? payload.confirmedThrough : null, coverage: healthy ? "complete" as const : payload.coverageUnknown === true ? "unknown" as const : "partial" as const, stale: typeof payload.stale === "boolean" ? payload.stale : null };
+  return { ok: true, markets: markets.map((market) => ({ ...market, discovery })), suspiciousEmpty: healthy && markets.length === 0 };
 }

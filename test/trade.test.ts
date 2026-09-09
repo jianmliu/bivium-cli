@@ -95,3 +95,16 @@ test("askBackingShortfall: credit alone, escrow alone, both, and the ceil that c
   // no escrow at all collapses to the pre-#171 rule
   assert.ok(askBackingShortfall({ units: 300_000_000n, credit: 0n, escrow: 0n, strike }) > 0n);
 });
+
+test('planning shares maker backing and fails closed on unreadable escrow', async () => {
+  const tc = new TradeClient(PROFILE);
+  const maker='0x000000000000000000000000000000000000000a';
+  const entries=[ask(4032n,250n,maker),ask(4048n,250n,maker)];
+  entries[1].offer.group='0x02';
+  tc.consumed=async()=>0n;
+  tc.creditOf=async()=>300n;
+  tc.collateralEscrowOf=async()=>0n;
+  assert.equal((await tc.planBuy(entries,{units:500n})).totalUnits,300n);
+  tc.collateralEscrowOf=async()=>{throw new Error('RPC unavailable')};
+  await assert.rejects(tc.planBuy(entries,{units:500n}),/backing|RPC unavailable/);
+});
