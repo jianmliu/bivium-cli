@@ -57,13 +57,13 @@ test("mcp: strategy_quote returns the confirm-screen numbers; strategy_plan adds
   assert.equal(q.quote.prepay, "966002800");
   assert.equal(q.quote.payoff.worstCase.form, "forfeit-collateral");
   assert.ok(q.quote.exerciseProbability > 0.33 && q.quote.exerciseProbability < 0.36);
-  const p = parsed(await call(7, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: Number(MATURITY), bufferPct: 48, aprBps: 1200, minOut: "900" }));
+  const p = parsed(await call(7, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: Number(MATURITY), bufferPct: 48, aprBps: "1200", minOut: "900" }));
   assert.equal(p.plan.mode, "sequential");
   assert.equal(p.plan.limits.maxLoss, p.quote.prepay);
 });
 
 test("mcp: tool-level failures are isError results, not protocol errors", async () => {
-  const r = await call(8, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: String(MATURITY), bufferPct: 48, aprBps: 1200 }); // no minOut
+  const r = await call(8, "strategy_plan", { strategy: "short", asset: "mAI", size: "10000", maturity: String(MATURITY), bufferPct: 48, aprBps: "1200" }); // no minOut
   const res = r!.result as { isError?: boolean; content: { text: string }[] };
   assert.equal(res.isError, true);
   assert.match(res.content[0]!.text, /minOut is required/);

@@ -2,13 +2,18 @@
 //
 // Deliberately hand-rolled: MCP is newline-delimited JSON-RPC 2.0 with three methods that matter
 // here (`initialize`, `tools/list`, `tools/call`) and a pure `handle(message)` core keeps the whole
-// thing hermetically testable without pulling `@modelcontextprotocol/sdk` (+ zod) into a repo that
-// is otherwise viem-only. Swapping in the official transport later is a one-file change.
+// thing hermetically testable. Ajv validates each advertised Draft 7 schema before dispatch.
+// Transport framing is bounded before decoding or accumulating a complete request.
 //
 // Scope is READ-ONLY on purpose: list the catalog, list markets, quote, plan. Nothing here signs
 // or sends — execution stays with the CLI (`borrow execute`, `trade buy`, …) under the user's key,
 // which is the "preview and execute are separate calls" rule from the design note.
-import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
+import { addressSchema, tokenSchema, decimalAmountSchema, integerStringSchema, integerSchema, positiveIntegerSchema } from "./schema.ts";
+import { ToolRegistry, READ_ONLY_ANNOTATIONS, type ToolDef, type ToolDefinition } from "./registry.ts";
+import { toolContent, toolFailure } from "./result.ts";
+export { toJsonText } from "./result.ts";
+export type { ToolDef } from "./registry.ts";
 import { BiviumClient } from "../sdk/client.ts";
 import { loadProfile } from "../sdk/profile.ts";
 import { catalogJson } from "../sdk/strategies/catalog.ts";
@@ -43,12 +48,6 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
-export interface ToolDef {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
 /** Injection points so the core can be driven without a network or a chain. */
 export interface McpDeps {
   profile: DeploymentProfile;
@@ -56,24 +55,24 @@ export interface McpDeps {
   /** Pre-fetched rows / spot / book — tests, or a host that already holds them. */
   overrides?: { rows?: PoolRow[]; spot?: SpotRef; book?: BookLoader; parity?: HttpQuoteLoader | false; positions?: (taker: string) => Promise<HttpPositionsResult> };
   now?: () => bigint;
+  /** Additional tool definitions; handlers receive an AbortSignal. */
+  tools?: ToolDefinition[];
+  requestTimeoutMs?: number;
 }
-
-const jsonReplacer = (_: string, v: unknown): unknown => (typeof v === "bigint" ? v.toString() : v);
-export const toJsonText = (value: unknown): string => JSON.stringify(value, jsonReplacer, 2);
 
 const viewProps = {
   strategy: { type: "string", description: "catalog id, e.g. short | leveredLong | lendQuote" },
-  asset: { type: "string", description: "profile token symbol or address the view is about" },
-  counter: { type: "string", description: "the other leg of a relative strategy (pairShort)" },
-  size: { type: "string", description: "human amount in the asset's units (numeraire units for lendQuote)" },
-  maturity: { type: ["string", "integer"], description: "an existing maturity (unix seconds) — pick from market_list" },
+  asset: { ...tokenSchema, description: "profile token symbol or address the view is about" },
+  counter: { ...tokenSchema, description: "the other leg of a relative strategy (pairShort)" },
+  size: { ...decimalAmountSchema, description: "human amount in the asset's units (numeraire units for lendQuote)" },
+  maturity: { ...integerSchema, description: "an existing maturity (unix seconds) — pick from market_list" },
   bufferPct: { type: "number", description: "strike distance from spot in the OTM direction, percent, positive = OTM" },
-  aprBps: { type: ["string", "integer"], description: "price the fill at a target simple APR (bps) instead of the live book" },
-  priceWad: { type: "string", description: "explicit WAD fill price (1e18 = par)" },
+  aprBps: { ...integerStringSchema, description: "price the fill at a target simple APR (bps) instead of the live book" },
+  priceWad: { ...integerStringSchema, description: "explicit WAD fill price (1e18 = par)" },
   sigma: { type: "number", description: "annualised realised volatility (7.11 = 711%) for P(exercise); the feed's sigma21d is used when present" },
   source: { type: "string", enum: ["relayer", "chain"], description: "market discovery source (default: relayer when the profile has one)" },
-  fromBlock: { type: ["string", "integer"], description: "chain-scan start block (default: profile.coreDeploymentBlock)" },
-  chunkBlocks: { type: ["string", "integer"], description: "getLogs blocks per call for chain scans (default 900; e.g. 200000 on RPCs that allow it)" },
+  fromBlock: { ...integerSchema, description: "chain-scan start block (default: profile.coreDeploymentBlock)" },
+  chunkBlocks: { ...positiveIntegerSchema, description: "getLogs blocks per call for chain scans (default 900; e.g. 200000 on RPCs that allow it)" },
 } as const;
 
 export const TOOLS: ToolDef[] = [
@@ -100,9 +99,9 @@ export const TOOLS: ToolDef[] = [
       required: ["strategy", "asset", "size", "maturity", "bufferPct"],
       properties: {
         ...viewProps,
-        router: { type: "string", description: "deployed StrategyRouter address, if any" },
-        minOut: { type: "string", description: "human floor for the swap leg (required when the strategy swaps)" },
-        ttlSeconds: { type: ["string", "integer"], description: "plan validity window (default 600)" },
+        router: { ...addressSchema, description: "deployed StrategyRouter address, if any" },
+        minOut: { ...decimalAmountSchema, description: "human floor for the swap leg (required when the strategy swaps)" },
+        ttlSeconds: { ...positiveIntegerSchema, description: "plan validity window (default 600)" },
       },
       additionalProperties: false,
     },
@@ -110,9 +109,9 @@ export const TOOLS: ToolDef[] = [
   {
     name: "strategy_positions",
     description: "An account's holdings read as strategies (from the app's /api/strategies/positions): candidate kinds per position, the two roads at maturity priced against each other, lender outcome, 48h urgency, auto-settle arm state, and the exact core action that exits. Read-only.",
-    inputSchema: { type: "object", properties: { taker: { type: "string", description: "the account address" } }, required: ["taker"] },
+    inputSchema: { type: "object", properties: { taker: { ...addressSchema, description: "the account address" } }, required: ["taker"], additionalProperties: false },
   },
-];
+].map(tool => ({...tool, annotations: READ_ONLY_ANNOTATIONS}));
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
@@ -163,7 +162,7 @@ function gatherRequestFrom(args: Record<string, unknown>, deps: McpDeps): Gather
 export function createStrategyMcp(deps: McpDeps) {
   const { profile } = deps;
 
-  async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  async function legacyCallTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
       case "strategy_list":
         return { count: catalogJson().length, strategies: catalogJson() };
@@ -213,6 +212,10 @@ export function createStrategyMcp(deps: McpDeps) {
     }
   }
 
+  const registry = new ToolRegistry(TOOLS.map(tool => ({...tool, timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})));
+  for (const tool of deps.tools ?? []) registry.register(tool);
+  const callTool = (name: string, args: unknown) => registry.call(name,args);
+
   /** One JSON-RPC message in → one response out (null for notifications). Never throws. */
   async function handle(message: unknown): Promise<JsonRpcResponse | null> {
     const req = message as Partial<JsonRpcRequest>;
@@ -232,18 +235,17 @@ export function createStrategyMcp(deps: McpDeps) {
         case "ping":
           return { jsonrpc: "2.0", id, result: {} };
         case "tools/list":
-          return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
+          return { jsonrpc: "2.0", id, result: { tools: registry.list() } };
         case "tools/call": {
           const p = (req.params ?? {}) as { name?: unknown; arguments?: unknown };
           const name = typeof p.name === "string" ? p.name : "";
-          const args = (p.arguments && typeof p.arguments === "object" ? p.arguments : {}) as Record<string, unknown>;
+          const args = p.arguments === undefined ? {} : p.arguments;
           try {
             const result = await callTool(name, args);
-            return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: toJsonText(result) }], structuredContent: JSON.parse(toJsonText(result)) } };
+            return { jsonrpc: "2.0", id, result: toolContent(result) };
           } catch (error) {
             // Tool-level failures are results with isError (the agent reads the message), not protocol errors.
-            const text = error instanceof Error ? error.message : String(error);
-            return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], isError: true } };
+            return { jsonrpc: "2.0", id, result: toolContent(toolFailure(error), true) };
           }
         }
         default:
@@ -254,27 +256,49 @@ export function createStrategyMcp(deps: McpDeps) {
     }
   }
 
-  return { tools: TOOLS, handle, callTool };
+  return { tools: registry.list(), handle, callTool, registry };
 }
 
-/** Serve over stdio: one JSON-RPC message per line in, one per line out; diagnostics to stderr. */
-export async function serveStdio(deps: McpDeps): Promise<void> {
+export const MAX_LINE_BYTES = 1024 * 1024;
+export interface StdioStreams { input: Readable; output: Writable; diagnostics: Writable }
+/** Frame bytes before decoding; discard oversized lines without ever accumulating them. */
+export async function serveStdio(deps: McpDeps, streams: StdioStreams = {input:process.stdin,output:process.stdout,diagnostics:process.stderr}): Promise<void> {
   const mcp = createStrategyMcp(deps);
-  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  process.stderr.write(`bivium-mcp: ${SERVER_INFO.name} ${SERVER_INFO.version} on profile ${deps.profile.name} (read-only tools: ${TOOLS.map((t) => t.name).join(", ")})\n`);
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  const {input,output,diagnostics} = streams;
+  const write = (response: unknown) => output.write(JSON.stringify(response) + "\n");
+  diagnostics.write(`bivium-mcp: ${SERVER_INFO.name} ${SERVER_INFO.version} on profile ${deps.profile.name}\n`);
+  let chunks: Buffer[] = [];
+  let size = 0;
+  let dropping = false;
+  async function processLine() {
+    const line = Buffer.concat(chunks,size).toString('utf8').trim(); chunks = []; size = 0;
+    if (!line) return;
     let message: unknown;
-    try {
-      message = JSON.parse(trimmed);
-    } catch {
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }) + "\n");
-      continue;
-    }
+    try { message = JSON.parse(line); }
+    catch { write({jsonrpc:'2.0',id:null,error:{code:-32700,message:'parse error'}}); return; }
     const response = await mcp.handle(message);
-    if (response) process.stdout.write(JSON.stringify(response) + "\n");
+    if (response) write(response);
   }
+  for await (const value of input) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10,offset);
+      const end = newline === -1 ? chunk.length : newline;
+      if (!dropping) {
+        const length = end-offset;
+        if (size + length > MAX_LINE_BYTES) {
+          chunks = []; size = 0; dropping = true;
+          write({jsonrpc:'2.0',id:null,error:{code:-32600,message:'request line exceeds 1 MiB'}});
+        } else if (length) { chunks.push(Buffer.from(chunk.subarray(offset,end))); size += length; }
+      }
+      if (newline !== -1) {
+        if (dropping) dropping = false; else await processLine();
+      }
+      offset = newline === -1 ? chunk.length : newline+1;
+    }
+  }
+  if (size && !dropping) await processLine();
 }
 
 /** Entry point: `bivium-mcp [--profile <path>]` (or BIVIUM_PROFILE). */
