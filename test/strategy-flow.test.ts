@@ -58,3 +58,12 @@ test('discovery reads each token decimal once per snapshot and bounds market sca
 test('source identifies the exact chosen commitment and ratifier',async()=>{
  const f=strategyFixture();const p=await f.flow.preview(f.input);assert.equal((p.data as any).source.selectedOrder.commitment,f.entries[0].commitment);assert.equal((p.data as any).source.selectedOrder.ratifier,f.profile.signatureRatifier);
 });
+test('caller mutation during asynchronous resolution cannot alter the captured intent',async()=>{
+ const f=strategyFixture();
+ const pending=f.flow.preview(f.input);
+ f.input.size='2';f.input.maxInput='0';f.input.evidence.mintable={state:'observed',value:true};
+ const p=await pending,source=(p.data as any).source;
+ assert.equal(source.requested.size,'1');assert.equal(source.requested.maxInput,'2');assert.deepEqual(source.requested.evidence,{});
+ assert.equal(source.economics.face.raw,String(10n**18n));
+ assert.ok(p.data.previewId);
+});

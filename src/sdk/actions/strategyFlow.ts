@@ -52,7 +52,8 @@ function validate(input:StrategyPreviewIntent) {
 /** Resolve a bounded high-level intent, then use the existing evaluator/store and unsigned preparation path. */
 export class StrategyFlowService {
  constructor(readonly actions:ActionService,readonly options:StrategyFlowOptions={}) {}
- async preview(input:StrategyPreviewIntent,signal?:AbortSignal) {
+ async preview(callerInput:StrategyPreviewIntent,signal?:AbortSignal) {
+  const input=structuredClone(callerInput);
   validate(input);const requested=structuredClone(input),context=this.actions.context,profile=context.profile;
   this.actions.policy(input.policyId);context.requireExecutable();
   const ctx=await context.pin(getAddress(input.account),signal),strategy=getStrategy(input.strategy);
