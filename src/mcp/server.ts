@@ -13,6 +13,9 @@ import { ActionError } from "../sdk/actions/types.ts";
 import { ActionContext } from "../sdk/actions/context.ts";
 import { createReadTools, READ_TOOL_SPECS } from "./tools/reads.ts";
 import { createActionTools, ACTION_TOOL_SPECS, loadPolicies } from "./tools/actions.ts";
+import { createStrategyTools, STRATEGY_TOOL_SPECS } from "./tools/strategies.ts";
+import { strategyCapabilities } from "../sdk/strategies/capabilities.ts";
+import type { StrategyFlowOptions } from "../sdk/actions/strategyFlow.ts";
 import { ActionService } from "../sdk/actions/preview.ts";
 import { OrderService } from "../sdk/actions/orders.ts";
 import { PublishJournal } from "../sdk/actions/orderJournal.ts";
@@ -66,6 +69,7 @@ export interface McpDeps {
   client?: BiviumClient;
   actionContext?: ActionContext;
   actionService?: ActionService;
+  strategyFlowOptions?: StrategyFlowOptions;
   policies?: { [id: string]: ConfiguredRiskPolicy };
   orderService?: OrderService;
   journal?: PublishJournal;
@@ -111,7 +115,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
   },
   {
     name: "strategy_plan",
-    description: "The quote plus a bounded execution plan: mode (intent | router | sequential — the last is NOT atomic), steps, and hard limits maxLoss / minOut / deadline / quoteId. Never executes; run the steps with the CLI under the user's key.",
+    description: "The quote plus a bounded execution plan: mode (intent | router | sequential — the last is NOT atomic), steps, and hard limits maxLoss / minOut / deadline / quoteId. Descriptive only; for the first four strategies use strategy_preview then action_prepare for unsigned wallet preparation.",
     inputSchema: {
       type: "object",
       required: ["strategy", "asset", "size", "maturity", "bufferPct"],
@@ -130,7 +134,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
     inputSchema: { type: "object", properties: { taker: { ...addressSchema, description: "the account address" } }, required: ["taker"], additionalProperties: false },
   },
 ].map(tool => ({...tool, annotations: READ_ONLY_ANNOTATIONS}));
-export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS, ...ACTION_TOOL_SPECS, ...ORDER_TOOL_SPECS, ...MM_TOOL_SPECS];
+export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS, ...ACTION_TOOL_SPECS, ...ORDER_TOOL_SPECS, ...MM_TOOL_SPECS, ...STRATEGY_TOOL_SPECS];
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
@@ -184,7 +188,7 @@ export function createStrategyMcp(deps: McpDeps) {
   async function legacyCallTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
       case "strategy_list":
-        return { count: catalogJson().length, strategies: catalogJson() };
+        return { count: catalogJson().length, strategies: catalogJson().map(s => ({ ...s, capabilities: strategyCapabilities(s.id, profile) })) };
       case "market_list": {
         const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n })));
         const filters = (args.filters ?? {}) as Record<string, unknown>;
@@ -259,6 +263,7 @@ export function createStrategyMcp(deps: McpDeps) {
   const orderService = deps.orderService ?? new OrderService(actionContext, actionService, { journal: deps.journal, allowRelayerWrites: deps.allowRelayerWrites });
   for (const tool of createOrderTools(orderService)) registry.register(tool);
   for (const tool of createMarketAnalysisTools(actionContext, deps.actionService?.policies ?? deps.policies ?? {}, orderService.journal)) registry.register(tool);
+  for (const tool of createStrategyTools(actionService, deps.strategyFlowOptions)) registry.register(tool);
   for (const tool of deps.tools ?? []) registry.register(tool);
   const callTool = (name: string, args: unknown) => registry.call(name,args);
 

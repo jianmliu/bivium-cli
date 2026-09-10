@@ -10,6 +10,7 @@ export interface ActionRpc {
   getChainId(): Promise<number>;
   getBlock(args?: { blockNumber?: bigint }): Promise<{ number: bigint | null; hash: Hex | null; timestamp: bigint }>;
   readContract(request: ContractRead): Promise<unknown>;
+  call?(request: { to: Address; data: Hex; blockNumber: bigint }): Promise<{ data?: Hex }>;
   simulateContract?(request: ContractRead): Promise<unknown>;
   getBytecode?(args: { address: Address; blockNumber: bigint }): Promise<Hex | undefined>;
   getTransactionReceipt?(args: { hash: Hex }): Promise<{ status: string; blockNumber: bigint; blockHash: Hex }>;

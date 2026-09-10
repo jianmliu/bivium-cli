@@ -14,7 +14,7 @@ test('real stdio subprocess reads, previews and prepares with no wallet or netwo
  const call=async(name:string,args:unknown)=>{const r=await request('tools/call',{name,arguments:args});assert.equal(r.result.isError,undefined,JSON.stringify(r));return r.result.structuredContent;};
  try{
  assert.equal((await request('initialize')).result.protocolVersion,'2025-06-18');
- assert.equal((await request('tools/list')).result.tools.length,20);
+ assert.equal((await request('tools/list')).result.tools.length,21);
  const account=`0x${'03'.repeat(20)}` as const;
  const profile={chainId:46630,abiProfile:'core-v2',core:`0x${'01'.repeat(20)}`} as DeploymentProfile;
  const params={loanToken:account,collateralToken:profile.core,maturity:2000000000n,strike:10n**36n,gate:ZERO_ADDRESS,allowPartialRepay:true};
@@ -25,6 +25,10 @@ test('real stdio subprocess reads, previews and prepares with no wallet or netwo
  const prepared=await call('action_prepare',{previewId:preview.data.previewId});assert.equal(prepared.data.kind,'ready');
  const tx=prepared.data.transaction;assert.equal(tx.chainId,46630);assert.equal(tx.from,account);assert.equal(tx.value,'0');
  const decoded=decodeFunctionData({abi:adapterFor('core-v2').coreAbi,data:tx.data});assert.equal(decoded.functionName,'fund');assert.ok((decoded.args as unknown[]).includes(1000000n));
+ const strategy=await call('strategy_preview',{strategy:'lendAsset',asset:'mAI',size:'1',maturity:'2000000000',bufferPct:0,account,maxInput:'1',slippageBps:100,policyId:'test',collateralKind:'other',evidence:{}});
+ assert.ok(strategy.data.previewId);assert.ok(strategy.data.binding.sourceHash);
+ const strategyTx=await call('action_prepare',{previewId:strategy.data.previewId});assert.equal(strategyTx.data.kind,'ready');
+ assert.equal(decodeFunctionData({abi:adapterFor('core-v2').coreAbi,data:strategyTx.data.transaction.data}).functionName,'multicall');
  child.stdin.end();const [code]=await once(child,'exit');assert.equal(code,0,diagnostics);
  }finally{child.kill();lines.close();}
 });

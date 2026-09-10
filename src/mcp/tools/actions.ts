@@ -14,7 +14,7 @@ const requiredBase = ["action", "marketId", "account", "receiver", "policyId", "
 const fills = { type: "array", minItems: 1, maxItems: 20, items: objectSchema({ offer: offerSchema, commitment: hashSchema, ratifierData: bytesSchema, units: { ...integerStringSchema, description: "Face in raw loan-token units" } }) };
 const trade = { fills, deadline: integerStringSchema, router: addressSchema, maxCost: integerStringSchema, minProceeds: integerStringSchema };
 const poolKey = objectSchema({ currency0: addressSchema, currency1: addressSchema, fee: { type: "integer", minimum: 0, maximum: 1000000 }, tickSpacing: { type: "integer", minimum: -8388608, maximum: 8388607 }, hooks: addressSchema });
-export const actionSchema = { oneOf: [
+export const actionSchema = { type: "object", oneOf: [
   ...["fund", "repay", "withdraw_liquidity", "claim", "escrow_collateral", "withdraw_collateral_escrow"].map((action) => objectSchema({ ...base, action: { const: action }, amount: decimalAmountSchema }, [...requiredBase, "amount"])),
   objectSchema({ ...base, action: { const: "withdraw_collateral" } }, requiredBase),
   objectSchema({ ...base, fills, deadline: integerStringSchema, router: addressSchema, maxCost: integerStringSchema, action: { const: "buy_dcn" } }, [...requiredBase, "fills", "deadline", "maxCost"]),
