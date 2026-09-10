@@ -1,0 +1,667 @@
+{
+  "maker": {
+    "makerAddress": "0x9A5487a37288AE594Cd7cA05582f541B09a8C516",
+    "chainId": 46630,
+    "transactions": [
+      {
+        "action": "gas_transfer",
+        "hash": "0x821bdedc1817931bd3b7d476a6455d955827a4e64744dd2a8a8dd5bfe12a4367"
+      },
+      {
+        "action": "register_ratifier",
+        "hash": "0x01d8a86f581876d855ca8d39d286dfa2327c306951415a8628d511613a4368db",
+        "gasUsed": "53673",
+        "blockNumber": "116975276"
+      },
+      {
+        "action": "mint_mCASHCAT",
+        "hash": "0x2ea50844c827031a82d7ba134e4b4745323ac8aa6302afd055bbde4e319f823f",
+        "gasUsed": "58673",
+        "blockNumber": "116975289"
+      },
+      {
+        "action": "fund_short",
+        "hash": "0xa651f487778ceb15416d85cfe7c4f40db028ad8b18fb8e30578d37204d0270bb",
+        "gasUsed": "81854",
+        "blockNumber": "116975306"
+      },
+      {
+        "action": "mint_bUSD",
+        "hash": "0x0c91534520912607651b40a910d0ad31aae8570edf466cbe596085bbd1495f26",
+        "gasUsed": "58637",
+        "blockNumber": "116975318"
+      },
+      {
+        "action": "fund_leveredLong",
+        "hash": "0x4101fe6910683c9d25740c0c2a778b2dd73bd6302183062d5ea6630ae053130d",
+        "gasUsed": "81164",
+        "blockNumber": "116975331"
+      }
+    ]
+  },
+  "orders": [
+    {
+      "strategy": "short",
+      "marketId": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+      "commitment": "0xf971e6603613a3eb1de5c6e01f71a74c5e95bd785f30beb5ba5a8661e73234be",
+      "state": "published"
+    },
+    {
+      "strategy": "leveredLong",
+      "marketId": "0xaf1232a1c6d9dd4537f4d7c3177d5c9c105036fd05d05d9b636b20c44c92f733",
+      "commitment": "0x19cafadebe555f9f6ae1f7fea07f2155be8ffcc137c4963afff1759778ebe66c",
+      "state": "published"
+    }
+  ],
+  "execution": {
+    "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+    "policy": {
+      "scope": "User-authorized mock-token testnet acceptance only",
+      "source": "user-policy",
+      "rules": {
+        "rejectArbitraryMint": false,
+        "rejectUnsellable": true,
+        "confirmOnUnknown": false
+      }
+    },
+    "outcomes": [
+      {
+        "strategy": "short",
+        "input": {
+          "strategy": "short",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 3.626943,
+          "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "maxPriceImpactBps": 500,
+          "policyId": "testnet-acceptance",
+          "collateralKind": "other",
+          "evidence": {
+            "mintable": {
+              "state": "observed",
+              "value": true,
+              "source": "Local MockToken source and successful permissionless mint receipts"
+            }
+          }
+        },
+        "status": "blocked_repeated_grant_fixed",
+        "transactions": [
+          {
+            "kind": "prerequisites",
+            "functionName": "grantAuthorization",
+            "to": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
+            "hash": "0xa952ed338648dbd5f9ddaebfda8c63984407b5e38e95b99a6be9472799654e51",
+            "status": "success",
+            "blockNumber": "116975560",
+            "gasUsed": "56363"
+          }
+        ],
+        "before": {
+          "blockNumber": "116975552",
+          "balances": {
+            "bUSD": "9002520",
+            "mCASHCAT": "9002570654817547449"
+          },
+          "credit": "0",
+          "position": {
+            "debt": "0",
+            "collateral": "0",
+            "collateralWithdrawable": "0"
+          }
+        },
+        "resolution": {
+          "market": {
+            "id": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+            "params": {
+              "loanToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "collateralToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+              "maturity": "1789372800",
+              "strike": "5000000000000000000000000000000000000000000000000",
+              "allowPartialRepay": true,
+              "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+            },
+            "firstSeenBlock": "113083354",
+            "discovery": {
+              "source": "https://bivium-robinhood.pages.dev/api/markets",
+              "observedAt": "2026-09-10T16:38:19.947Z",
+              "confirmedThrough": "116967368",
+              "coverage": "complete",
+              "stale": false
+            }
+          },
+          "selectedOrder": {
+            "commitment": "0xf971e6603613a3eb1de5c6e01f71a74c5e95bd785f30beb5ba5a8661e73234be",
+            "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+            "maker": "0x9A5487a37288AE594Cd7cA05582f541B09a8C516",
+            "units": "1000000000000000000"
+          },
+          "route": {
+            "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+            "lenderMustRoute": true,
+            "feeBps": "1000"
+          },
+          "economics": {
+            "face": {
+              "raw": "1000000000000000000",
+              "decimals": 18,
+              "human": "1",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "cost": {
+              "raw": "997086329032274611",
+              "decimals": 18,
+              "human": "0.997086329032274611",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "fee": {
+              "raw": "291367096772538",
+              "decimals": 18,
+              "human": "0.000291367096772538",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "principal": {
+              "raw": "996794961935502073",
+              "decimals": 18,
+              "human": "0.996794961935502073",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "collateral": {
+              "raw": "200000",
+              "decimals": 6,
+              "human": "0.2",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "topUp": {
+              "raw": "0",
+              "decimals": 6,
+              "human": "0",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "maxInput": {
+              "raw": "1000000",
+              "decimals": 6,
+              "human": "1",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            }
+          },
+          "swap": {
+            "minOut": {
+              "raw": "288302",
+              "decimals": 6,
+              "human": "0.288302",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "source": "pool-depth",
+            "estimate": {
+              "raw": "291215",
+              "decimals": 6,
+              "human": "0.291215",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "slippageBps": 100,
+            "impactBps": 2,
+            "poolKey": {
+              "fee": 3000,
+              "tickSpacing": 60,
+              "hooks": "0x0000000000000000000000000000000000000000",
+              "currency0": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "currency1": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "amountIn": {
+              "raw": "996794961935502073",
+              "decimals": 18,
+              "human": "0.996794961935502073",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            }
+          }
+        }
+      },
+      {
+        "strategy": "short",
+        "input": {
+          "strategy": "short",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 3.626943,
+          "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "maxPriceImpactBps": 500,
+          "policyId": "testnet-acceptance",
+          "collateralKind": "other",
+          "evidence": {
+            "mintable": {
+              "state": "observed",
+              "value": true,
+              "source": "Local MockToken source and successful permissionless mint receipts"
+            }
+          }
+        },
+        "status": "executed",
+        "transactions": [
+          {
+            "kind": "prerequisites",
+            "functionName": "grantAuthorization",
+            "to": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
+            "hash": "0x0de132be229f57ec0bcd26460d3fe85009d9cc3fddc70f731516a694e1f2cec7",
+            "status": "success",
+            "blockNumber": "116976151",
+            "gasUsed": "39220"
+          },
+          {
+            "kind": "ready",
+            "functionName": "execute",
+            "to": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+            "hash": "0x78f03c5c89626de745f7cdda8fd5b7523ada4faf449d5cecd6741ab8ece703bf",
+            "status": "success",
+            "blockNumber": "116976232",
+            "gasUsed": "415592"
+          }
+        ],
+        "before": {
+          "blockNumber": "116976141",
+          "balances": {
+            "bUSD": "9002520",
+            "mCASHCAT": "9002570654817547449"
+          },
+          "credit": "0",
+          "position": {
+            "debt": "0",
+            "collateral": "0",
+            "collateralWithdrawable": "0"
+          }
+        },
+        "after": {
+          "blockNumber": "116976232",
+          "balances": {
+            "bUSD": "9093735",
+            "mCASHCAT": "9002570654817547449"
+          },
+          "credit": "0",
+          "position": {
+            "debt": "1000000000000000000",
+            "collateral": "200000",
+            "collateralWithdrawable": "0"
+          }
+        },
+        "resolution": {
+          "market": {
+            "id": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+            "params": {
+              "loanToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "collateralToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+              "maturity": "1789372800",
+              "strike": "5000000000000000000000000000000000000000000000000",
+              "allowPartialRepay": true,
+              "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+            },
+            "firstSeenBlock": "113083354",
+            "discovery": {
+              "source": "https://bivium-robinhood.pages.dev/api/markets",
+              "observedAt": "2026-09-10T16:40:00.501Z",
+              "confirmedThrough": "116967368",
+              "coverage": "complete",
+              "stale": false
+            }
+          },
+          "selectedOrder": {
+            "commitment": "0xf971e6603613a3eb1de5c6e01f71a74c5e95bd785f30beb5ba5a8661e73234be",
+            "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+            "maker": "0x9A5487a37288AE594Cd7cA05582f541B09a8C516",
+            "units": "1000000000000000000"
+          },
+          "route": {
+            "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+            "lenderMustRoute": true,
+            "feeBps": "1000"
+          },
+          "economics": {
+            "face": {
+              "raw": "1000000000000000000",
+              "decimals": 18,
+              "human": "1",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "cost": {
+              "raw": "997086329032274611",
+              "decimals": 18,
+              "human": "0.997086329032274611",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "fee": {
+              "raw": "291367096772538",
+              "decimals": 18,
+              "human": "0.000291367096772538",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "principal": {
+              "raw": "996794961935502073",
+              "decimals": 18,
+              "human": "0.996794961935502073",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "collateral": {
+              "raw": "200000",
+              "decimals": 6,
+              "human": "0.2",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "topUp": {
+              "raw": "0",
+              "decimals": 6,
+              "human": "0",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "maxInput": {
+              "raw": "1000000",
+              "decimals": 6,
+              "human": "1",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            }
+          },
+          "swap": {
+            "minOut": {
+              "raw": "288302",
+              "decimals": 6,
+              "human": "0.288302",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "source": "pool-depth",
+            "estimate": {
+              "raw": "291215",
+              "decimals": 6,
+              "human": "0.291215",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "slippageBps": 100,
+            "impactBps": 2,
+            "poolKey": {
+              "fee": 3000,
+              "tickSpacing": 60,
+              "hooks": "0x0000000000000000000000000000000000000000",
+              "currency0": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "currency1": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "amountIn": {
+              "raw": "996794961935502073",
+              "decimals": 18,
+              "human": "0.996794961935502073",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            }
+          }
+        }
+      },
+      {
+        "strategy": "leveredLong",
+        "input": {
+          "strategy": "leveredLong",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 9.326425,
+          "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "maxPriceImpactBps": 500,
+          "policyId": "testnet-acceptance",
+          "collateralKind": "meme",
+          "evidence": {
+            "mintable": {
+              "state": "observed",
+              "value": true,
+              "source": "Local MockToken source and successful permissionless mint receipts"
+            }
+          }
+        },
+        "status": "executed",
+        "transactions": [
+          {
+            "kind": "prerequisites",
+            "functionName": "approve",
+            "to": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+            "hash": "0x61cdf2272d58c706c66a65508842f8faa090db8e9dce354c2ade29db8819207f",
+            "status": "success",
+            "blockNumber": "116976312",
+            "gasUsed": "54358"
+          },
+          {
+            "kind": "ready",
+            "functionName": "execute",
+            "to": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+            "hash": "0x2ca0d669a0c00370a94310462a2e062bcbe034f06d8beb213dd43944e8e3d738",
+            "status": "success",
+            "blockNumber": "116976385",
+            "gasUsed": "420597"
+          }
+        ],
+        "before": {
+          "blockNumber": "116976300",
+          "balances": {
+            "bUSD": "9093735",
+            "mCASHCAT": "9002570654817547449"
+          },
+          "credit": "0",
+          "position": {
+            "debt": "0",
+            "collateral": "0",
+            "collateralWithdrawable": "0"
+          }
+        },
+        "after": {
+          "blockNumber": "116976385",
+          "balances": {
+            "bUSD": "9093735",
+            "mCASHCAT": "8596115553506443340"
+          },
+          "credit": "0",
+          "position": {
+            "debt": "175000",
+            "collateral": "1000000000000000000",
+            "collateralWithdrawable": "0"
+          }
+        },
+        "resolution": {
+          "market": {
+            "id": "0xaf1232a1c6d9dd4537f4d7c3177d5c9c105036fd05d05d9b636b20c44c92f733",
+            "params": {
+              "loanToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+              "collateralToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "maturity": "1789372800",
+              "strike": "175000000000000000000000",
+              "allowPartialRepay": false,
+              "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+            },
+            "firstSeenBlock": "113083532",
+            "discovery": {
+              "source": "https://bivium-robinhood.pages.dev/api/markets",
+              "observedAt": "2026-09-10T16:40:24.508Z",
+              "confirmedThrough": "116970293",
+              "coverage": "complete",
+              "stale": false
+            }
+          },
+          "selectedOrder": {
+            "commitment": "0x19cafadebe555f9f6ae1f7fea07f2155be8ffcc137c4963afff1759778ebe66c",
+            "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+            "maker": "0x9A5487a37288AE594Cd7cA05582f541B09a8C516",
+            "units": "175000"
+          },
+          "route": {
+            "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+            "lenderMustRoute": true,
+            "feeBps": "1000"
+          },
+          "economics": {
+            "face": {
+              "raw": "175000",
+              "decimals": 6,
+              "human": "0.175",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "cost": {
+              "raw": "174490",
+              "decimals": 6,
+              "human": "0.17449",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "fee": {
+              "raw": "51",
+              "decimals": 6,
+              "human": "0.000051",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "principal": {
+              "raw": "174439",
+              "decimals": 6,
+              "human": "0.174439",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "collateral": {
+              "raw": "1000000000000000000",
+              "decimals": 18,
+              "human": "1",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "topUp": {
+              "raw": "412390550297993068",
+              "decimals": 18,
+              "human": "0.412390550297993068",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "maxInput": {
+              "raw": "1000000000000000000",
+              "decimals": 18,
+              "human": "1",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            }
+          },
+          "swap": {
+            "minOut": {
+              "raw": "587609449702006932",
+              "decimals": 18,
+              "human": "0.587609449702006932",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "source": "pool-depth",
+            "estimate": {
+              "raw": "593544898688895891",
+              "decimals": 18,
+              "human": "0.593544898688895891",
+              "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+            },
+            "slippageBps": 100,
+            "impactBps": 2,
+            "poolKey": {
+              "fee": 3000,
+              "tickSpacing": 60,
+              "hooks": "0x0000000000000000000000000000000000000000",
+              "currency0": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+              "currency1": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            },
+            "amountIn": {
+              "raw": "174439",
+              "decimals": 6,
+              "human": "0.174439",
+              "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "cleanup": {
+    "at": "2026-09-10T16:41:28.218Z",
+    "steps": [
+      {
+        "action": "cancel_short",
+        "result": {
+          "cap": "1000000000000000000",
+          "consumedBefore": "1000000000000000000",
+          "relayer": "deleted"
+        }
+      },
+      {
+        "action": "withdraw_unused_short",
+        "amount": "2913670967725389",
+        "hash": "0xf581f709d4bbf8123b2a1dd4430d4d9090bc204fa3d609e33d9750d5e422a6e6",
+        "gasUsed": "85848",
+        "blockNumber": "116976758"
+      },
+      {
+        "action": "cancel_leveredLong",
+        "result": {
+          "cap": "175000",
+          "consumedBefore": "175000",
+          "relayer": "deleted"
+        }
+      },
+      {
+        "action": "withdraw_unused_leveredLong",
+        "amount": "825510",
+        "hash": "0x08fad288bb7437fba21d373ee834030f30e0b9968070fd1e8b103506e26c9e06",
+        "gasUsed": "85285",
+        "blockNumber": "116976777"
+      },
+      {
+        "action": "revoke_allowance_mCASHCAT",
+        "hash": "0x761c52369de41b33f0e2343bc3e3bea7ef16082ab51d33665c5f8b505ae66b63",
+        "gasUsed": "32315",
+        "blockNumber": "116976784"
+      },
+      {
+        "action": "revoke_core_grant",
+        "hash": "0xa23f571d1c82a2757b682d0097db1f3347e81c29bd8653d62450a7bf878968ef",
+        "status": "success"
+      }
+    ]
+  },
+  "finalState": {
+    "blockNumber": "116977005",
+    "grant": [
+      "0",
+      "0"
+    ],
+    "tokens": [
+      {
+        "symbol": "bUSD",
+        "balance": "9093735",
+        "allowance": "0"
+      },
+      {
+        "symbol": "mCASHCAT",
+        "balance": "8596115553506443340",
+        "allowance": "0"
+      }
+    ],
+    "markets": [
+      {
+        "strategy": "short",
+        "marketId": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+        "position": {
+          "debt": "1000000000000000000",
+          "collateral": "200000",
+          "collateralWithdrawable": "0"
+        },
+        "makerLiquidity": "0",
+        "makerCredit": "1000000000000000000",
+        "consumed": "1000000000000000000"
+      },
+      {
+        "strategy": "leveredLong",
+        "marketId": "0xaf1232a1c6d9dd4537f4d7c3177d5c9c105036fd05d05d9b636b20c44c92f733",
+        "position": {
+          "debt": "175000",
+          "collateral": "1000000000000000000",
+          "collateralWithdrawable": "0"
+        },
+        "makerLiquidity": "0",
+        "makerCredit": "175000",
+        "consumed": "175000"
+      }
+    ]
+  }
+}
