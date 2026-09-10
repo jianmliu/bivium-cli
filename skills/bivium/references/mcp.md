@@ -77,3 +77,7 @@ A missing tool is grounds to fall back to the CLI **preview/dry-run** path. It n
 ## Host journal operation
 
 One writer owns a journal directory. The default limit is 1,000 records; overflow stops new preparation without deleting exposure. Signed public payloads persist with atomic replacement and fsync. A crash can leave a writer lock: the host must verify the old process is gone before removing that lock. Do not delete the journal to resolve a retry or capacity error. Archival requires preserving potential signature exposure for later reconciliation. MCP arguments cannot select paths or raise these limits.
+
+### Borrow authorization lifetime
+
+Unsigned borrowing prerequisites grant only `CAP_FILL`, with expiry at the execution deadline plus a five-minute repreview allowance (without uint256 overflow). After the grant receipt, obtain a fresh `strategy_preview`; its transaction still enforces its own deadline and economic limits. Expired grants require renewal. Revoking the Core grant after a one-off test removes the remaining authority; ERC-20 allowances are separate and should also be checked.

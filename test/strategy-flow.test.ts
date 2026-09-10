@@ -79,3 +79,27 @@ test('revoked best order is skipped for a ratified full-size order, but RPC fail
  f.context.rpc.readContract=async(r)=>{if(r.functionName==='isRatified')throw new Error('ratifier RPC unavailable');return read(r);};
  await assert.rejects(f.flow.preview(f.input),/ratifier RPC unavailable/);
 });
+
+test('borrow grant remains usable after approval receipt and a fresh preview advances the deadline', async () => {
+ const state={grantOf:[0n,0n]};
+ const f=strategyFixture('short',state);
+ const first=await f.flow.preview(f.input);
+ const prepared=await f.actions.prepare(first.data.previewId!);
+ assert.equal(prepared.data.kind,'prerequisites');
+ if(prepared.data.kind!=='prerequisites')throw Error('grant expected');
+ const {decodeFunctionData}=await import('viem');const {grantAbi}=await import('../src/sdk/strategyRouter.ts');
+ const grant=decodeFunctionData({abi:grantAbi,data:prepared.data.transactions[0].data});
+ const [,caps,expiry]=grant.args! as readonly [string,bigint,bigint];
+ assert.equal(caps,4n);assert.ok(expiry<=460n,'grant must remain bounded to deadline plus five minutes');
+ state.grantOf=[caps,expiry];
+ const rpc=f.context.options.rpc!;
+ const original=rpc.getBlock.bind(rpc);
+ rpc.getBlock=async args=>({...await original(args),timestamp:110n});
+ const fresh=await f.flow.preview(f.input);
+ const ready=await f.actions.prepare(fresh.data.previewId!);
+ assert.equal(ready.data.kind,'ready','already mined grant must cover the fresh execution deadline');
+ rpc.getBlock=async args=>({...await original(args),timestamp:500n});
+ const expired=await f.flow.preview(f.input);
+ const renew=await f.actions.prepare(expired.data.previewId!);
+ assert.equal(renew.data.kind,'prerequisites','expired grant must still require renewal');
+});

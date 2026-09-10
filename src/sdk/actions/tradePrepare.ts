@@ -10,6 +10,8 @@ import { ZERO_ADDRESS, type Address, type Position } from '../types.ts';
 import type { ActionContext, ReadContext, ContractRead } from './context.ts';
 import type { ActionIntent, ActionEvaluation } from './preview.ts';
 import { ActionError, type UnsignedTx } from './types.ts';
+// A mined prerequisite must survive a fresh preview whose deadline advances with the next block.
+const GRANT_REPREVIEW_SECONDS = 300n;
 const raw=(s:string|undefined,label:string,positive=false)=>{if(s===undefined||!/^\d+$/.test(s))throw new ActionError('INVALID_ARGUMENT',`${label} must be a raw integer string`);const n=BigInt(s);if(n>=(1n<<256n)||(positive&&n===0n))throw new ActionError('INVALID_ARGUMENT',`${label} out of range`);return n;};
 export async function evaluateTradeAction(context:ActionContext,intent:ActionIntent,ctx:ReadContext):Promise<ActionEvaluation>{
  context.requireExecutable();
@@ -77,7 +79,14 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
  const prerequisites:ContractRead[]=[];
  const token=buying?p.loanToken:p.collateralToken,needed=buying?paid:borrowing?topUp:0n,spender=router??ctx.core;
  if(needed>0n){const balance=await read<bigint>(token,erc20Abi,'balanceOf',[intent.account]),allowance=await read<bigint>(token,erc20Abi,'allowance',[intent.account,spender]);if(balance<needed)throw new ActionError('INSUFFICIENT_BALANCE','Wallet balance below required funds');if(allowance<needed)prerequisites.push({address:token,abi:erc20Abi,functionName:'approve',args:[spender,needed]});}
- if(router&&borrowing){const [caps,expiry]=await read<readonly[bigint,bigint]>(ctx.core,grantAbi,'grantOf',[intent.account,router]);if((caps&CAP_FILL)!==CAP_FILL||(expiry!==0n&&expiry<deadline))prerequisites.push({address:ctx.core,abi:grantAbi,functionName:'grantAuthorization',args:[router,CAP_FILL,deadline]});}
+ if(router&&borrowing){
+  const [caps,expiry]=await read<readonly[bigint,bigint]>(ctx.core,grantAbi,'grantOf',[intent.account,router]);
+  if((caps&CAP_FILL)!==CAP_FILL||(expiry!==0n&&expiry<deadline)){
+   const maxUint=(1n<<256n)-1n;
+   const grantExpiry=deadline>maxUint-GRANT_REPREVIEW_SECONDS?deadline:deadline+GRANT_REPREVIEW_SECONDS;
+   prerequisites.push({address:ctx.core,abi:grantAbi,functionName:'grantAuthorization',args:[router,CAP_FILL,grantExpiry]});
+  }
+ }
  const request:ContractRead=router?{address:router,abi:routerAbi,functionName:'execute',args:[legs,deadline]}:{address:ctx.core,abi:context.adapter.coreAbi,functionName:'multicall',args:[takes.map(t=>encodeFunctionData({abi:context.adapter.coreAbi,functionName:'fill',args:[context.adapter.chainOffer(context.profile,t.entry.offer),t.entry.signature,t.units,intent.account,intent.receiver]} as never))]};
  const tx=(r:ContractRead):UnsignedTx=>({chainId:ctx.chainId,from:intent.account,to:r.address,data:encodeFunctionData({abi:r.abi as Abi,functionName:r.functionName,args:r.args}),value:'0'});
  if(!ctx.rpc.simulateContract)throw new ActionError('UPSTREAM_UNAVAILABLE','Public simulation unavailable',true);
