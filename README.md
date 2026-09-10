@@ -23,7 +23,7 @@ the [operator guide](skills/bivium/references/operators.md). These roles use the
 `bivium-mm` local session executor, not new consumer strategy IDs or the legacy combined Worker.
 Automatic execution is available only after checking the installed executor's capabilities and
 explicitly approving its exact role/account/market/budget/expiry policy. Ordinary CLI trades
-still require per-transaction approval; this does not add signing to the read-only MCP server.
+still require per-transaction approval; this does not add signing to the MCP server.
 
 Use separate user-controlled dedicated accounts for MM and keeper. Limits are enforced by
 software, not cryptographic restrictions on the EOA key. The initial operator mode excludes
@@ -148,6 +148,7 @@ mainnet `4663` remains identity/reference-only. Executable preparation is testne
 |---|---|
 | `strategy_list`, `market_list`, `strategy_quote`, `strategy_plan`, `strategy_positions` | Compatible strategy discovery and descriptive planning |
 | `server_info`, `market_details`, `book_snapshot`, `account_snapshot`, `order_status`, `transaction_status` | Deployment, block-pinned reads and explicit coverage |
+| `strategy_preview` | Resolve the four first-release strategies from user parameters into a risk-bound exact-intent preview |
 | `risk_assess`, `action_preview`, `action_prepare` | Host policy, expiring exact-intent preview, revalidation and public simulation |
 | `order_prepare`, `order_publish`, `order_cancel_prepare`, `order_delist` | External signing, opt-in publication and scoped cancellation |
 | `mm_preview`, `arbitrage_preview` | Known-inventory stress and explicit candidate spread analysis |
@@ -162,6 +163,21 @@ Policy files map IDs to `{source, rules, inventory?}`. `source` is `user-policy`
 `maxCredit`, `maxNewDebt`, `minCash`, `maxCommittedLoan`, `maxLoss`, boolean `allowOrigination`, and optional
 `requireDailyLossAccounting`. No policy means no executable risk acceptance. Basic action amounts are
 human decimal strings; trade fills, caps and inventory budgets use raw token units. Tool schemas are authoritative.
+
+For `lendAsset`, `lendQuote`, `short`, and `leveredLong`, use
+`strategy_list` → `strategy_preview` → `action_prepare` → external wallet → `transaction_status`.
+`strategy_preview` accepts strategy, asset, size, listed maturity, bufferPct, account, maxInput,
+slippageBps and risk policy/evidence; swap strategies also require maxPriceImpactBps. It chooses the
+market, exact signed order, gate-approved route and bounded swap internally. No order files or pool keys
+are needed from the agent. `strategy_list.capabilities` distinguishes this workflow from descriptive
+quotes and other strategies' exact-fill-only preparation.
+
+Size is human DCN face for both lending strategies and short; leveredLong uses human collateral-asset
+holding to size debt at the selected strike. maxInput is total loan-token spend for lenders and maximum
+collateral-token wallet top-up for borrowers. Each preview uses one full-size fill; no liquidity never
+silently becomes a resting order. After approvals, repeat strategy_preview. Host integrations can pass
+bounded pool candidates through StrategyFlowOptions; the default candidate matches the CLI's
+3000 fee / 60 spacing / zero hooks and must be verified against live pool state before use.
 
 The default journal lives under `$XDG_STATE_HOME/bivium/mcp/<chain>-<core>` or
 `~/.local/state/bivium/mcp/<chain>-<core>`. It allows one writer and retains up to 1,000 records without
