@@ -110,7 +110,7 @@ export class StrategyFlowService {
    const ratifierArgs=[...context.adapter.ratifierArgs(e.offer.maker,units,e.commitment,e.signature)];
    if(profile.abiProfile==='core-v2')ratifierArgs[1]=lending&&router?router:input.account;
    const ratified=await context.read<string>(ctx,e.offer.ratifier,context.adapter.ratifierAbi,'isRatified',ratifierArgs);
-   if(typeof ratified!=='string'||!/^0x[0-9a-fA-F]{8}$/.test(ratified))throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid ratifier response');
+   if(typeof ratified!=='string'||!/^0x[0-9a-fA-F]{64}$/.test(ratified))throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid ratifier response');
    if(ratified!==RATIFIED)continue;
    selected=e;cost=uint(fillCost(e.offer,units,e.price),'cost',true);break;
   }

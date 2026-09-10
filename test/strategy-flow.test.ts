@@ -73,7 +73,7 @@ test('revoked best order is skipped for a ratified full-size order, but RPC fail
  const commitment=adapter.offerCommitment(f.profile,worse);
  f.entries.push({...f.entries[0],offer:worse,commitment});
  const read=f.context.rpc.readContract.bind(f.context.rpc);
- f.context.rpc.readContract=async(r)=>r.functionName==='isRatified'&&r.args?.[3]===f.entries[0].commitment?'0x00000000':read(r);
+ f.context.rpc.readContract=async(r)=>r.functionName==='isRatified'&&r.args?.[3]===f.entries[0].commitment?`0x${'00'.repeat(32)}`:read(r);
  const p=await f.flow.preview(f.input);
  assert.equal((p.data as any).source.selectedOrder.commitment,commitment);
  f.context.rpc.readContract=async(r)=>{if(r.functionName==='isRatified')throw new Error('ratifier RPC unavailable');return read(r);};
