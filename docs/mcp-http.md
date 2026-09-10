@@ -2,6 +2,14 @@
 
 The CLI supports stdio and authenticated Streamable HTTP (MCP 2025-06-18, JSON response mode). The Cloudflare deployment exposes `/mcp`; `/health` is a public liveness check. GET `/mcp` returns 405 because this server has no standalone SSE stream. Use a client with configurable Authorization headers; automatic OAuth login is not implemented.
 
+## Deployed endpoint
+
+- Streamable HTTP: `https://bivium-mcp.liujm06.workers.dev/mcp`
+- Public health check: `https://bivium-mcp.liujm06.workers.dev/health`
+- Cloudflare Worker: `bivium-mcp`, Robinhood testnet (chain 46630).
+- Verified 2026-09-10 using the official MCP SDK: all 10 acceptance checks passed, with 21 tools and 40 live markets. See [deployment evidence](validation/2026-09-10-mcp-http-deployment.json).
+- Requires a private Bearer token. A client that cannot supply Authorization headers needs an authentication adapter; OAuth discovery/login is not provided.
+
 ## Local Node server
 
 Set `BIVIUM_MCP_TOKEN` from a private local file/environment (at least 32 characters), then run:

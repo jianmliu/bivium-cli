@@ -1,0 +1,121 @@
+{
+  "at": "2026-09-10T17:04:38.889Z",
+  "url": "https://bivium-mcp.liujm06.workers.dev/mcp",
+  "checks": [
+    "health",
+    "unauthenticated request rejected",
+    "foreign Origin rejected",
+    "official SDK initialize",
+    "21 tools",
+    "deployment identity and execution boundaries",
+    "standalone schema validation",
+    "live relayer market discovery",
+    "conservative risk policy refuses unknown evidence",
+    "session deletion and stale-id refusal"
+  ],
+  "tools": [
+    "strategy_list",
+    "market_list",
+    "strategy_quote",
+    "strategy_plan",
+    "strategy_positions",
+    "server_info",
+    "market_details",
+    "book_snapshot",
+    "account_snapshot",
+    "order_status",
+    "transaction_status",
+    "risk_assess",
+    "action_preview",
+    "action_prepare",
+    "order_prepare",
+    "order_publish",
+    "order_cancel_prepare",
+    "order_delist",
+    "mm_preview",
+    "arbitrage_preview",
+    "strategy_preview"
+  ],
+  "server": {
+    "version": "0.1.0",
+    "profile": "robinhood-testnet",
+    "chainId": 46630,
+    "core": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
+    "abiProfile": "core-v2",
+    "highLevelStrategies": [
+      "lendAsset",
+      "lendQuote",
+      "short",
+      "leveredLong"
+    ],
+    "supportedActions": [
+      "fund",
+      "repay",
+      "withdraw_liquidity",
+      "claim",
+      "escrow_collateral",
+      "withdraw_collateral_escrow",
+      "withdraw_collateral",
+      "buy_dcn",
+      "sell_dcn",
+      "borrow",
+      "strategy_program"
+    ],
+    "tools": [
+      "strategy_list",
+      "market_list",
+      "strategy_quote",
+      "strategy_plan",
+      "strategy_positions",
+      "server_info",
+      "market_details",
+      "book_snapshot",
+      "account_snapshot",
+      "order_status",
+      "transaction_status",
+      "risk_assess",
+      "action_preview",
+      "action_prepare",
+      "order_prepare",
+      "order_publish",
+      "order_cancel_prepare",
+      "order_delist",
+      "mm_preview",
+      "arbitrage_preview",
+      "strategy_preview"
+    ],
+    "policyIds": [
+      "conservative"
+    ],
+    "ratifiers": {
+      "signature": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+      "setter": null
+    },
+    "relayerWrites": false,
+    "chainSigning": false,
+    "chainBroadcasting": false,
+    "executableNetwork": true,
+    "limits": {
+      "list": 100,
+      "marketIds": 20,
+      "rpcConcurrency": 8,
+      "requestMs": 30000,
+      "simulationMs": 60000,
+      "upstreamMs": 8000
+    },
+    "limitations": [
+      "Legacy strategy plans are descriptive.",
+      "Snapshots do not reserve funds.",
+      "Complete outstanding signature inventory is unknown."
+    ]
+  },
+  "marketCount": 40,
+  "deployment": {
+    "worker": "bivium-mcp",
+    "versionId": "33aa4b40-f405-4ed8-b4a5-fe2ee12c7d5d",
+    "implementationCommit": "55056e2",
+    "testsPassed": 401,
+    "typecheck": "passed",
+    "transactionsSubmitted": 0
+  }
+}
