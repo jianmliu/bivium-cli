@@ -142,3 +142,7 @@ test('manual bounded keeper routing is explicitly separate from operator automat
     assert.match(document, /not[^\n]*automation[^\n]*budget approval/i);
   }
 });
+test('first-release strategy workflow states sizing and exact preview continuation',()=>{
+ const reference=readFileSync(new URL('../skills/bivium/references/mcp.md',import.meta.url),'utf8');
+ for(const text of ['strategy_preview','maxInput','maxPriceImpactBps','lendAsset','lendQuote','leveredLong','short','sizing basis','full-size','original high-level request'])assert.ok(reference.includes(text),text);
+});

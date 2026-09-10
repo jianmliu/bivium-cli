@@ -423,6 +423,12 @@ is not account-wide safety, and missing MCP capabilities permit only CLI preview
                                           "env": { "BIVIUM_PROFILE": "<bivium-cli>/profiles/robinhood-testnet.json" } } } }
 ```
 
+For the four initial strategies (`lendAsset`, `lendQuote`, `short`, `leveredLong`), prefer
+`strategy_preview` with high-level user parameters, then `action_prepare` with its previewId.
+Read the per-strategy `size` and `maxInput` units in [MCP workflows](references/mcp.md).
+Do not invent fills/pool keys, treat a descriptive quote as executable, or automatically turn missing
+liquidity into a resting order. After wallet prerequisites, rerun `strategy_preview`.
+
 Tools: `market_list` (discover available terms first; join existing markets), `strategy_list`
 (then read the catalog and resolve the confirmed goal),
 `strategy_quote` (worstCase / prepay / breakEven / boundary / exerciseProbability / payoff),

@@ -28,7 +28,10 @@
     "mcp": "tsx src/mcp/server.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "verify:keeper-integration": "node --import tsx scripts/check-keeper-integration.mjs"
+    "verify:keeper-integration": "node --import tsx scripts/check-keeper-integration.mjs",
+    "mcp:worker:build": "node --import tsx scripts/build-mcp-worker.mjs",
+    "mcp:http": "tsx src/mcp/server.ts --transport http",
+    "mcp:deploy": "wrangler deploy --config wrangler.mcp.toml"
   },
   "dependencies": {
     "ajv": "^8.20.0",
@@ -36,7 +39,9 @@
     "viem": "^2.53.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "wrangler": "^4.131.0"
   }
 }

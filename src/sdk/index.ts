@@ -26,3 +26,6 @@ export * from "./actions/marketAnalysis.ts";
 export * from "./marketMaking.ts";
 export * from "./arbitrage.ts";
 export * from "./settler.ts";
+
+export * from "./actions/strategyFlow.ts";
+export * from "./strategies/capabilities.ts";

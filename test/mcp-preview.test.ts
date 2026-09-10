@@ -82,3 +82,25 @@ test("raw checksum and unused SDK economic constraints are rejected", async () =
   await assert.rejects(f.service.preview({ ...request, receiver: "0x52908400098527886E0F7030069857D2E4169Ee7" }), /INVALID_ARGUMENT/);
   await assert.rejects(f.service.preview({ ...request, deadline: "0", maxCost: "0" }), /INVALID_ARGUMENT/);
 });
+test('resolved strategy source uses the same snapshot and survives caller mutation', async () => {
+  const f=fixture(),ctx=await f.context.pin(account);
+  const source={strategy:'lendAsset',requested:{size:'1'}};
+  const preview=await f.service.preview(request,undefined,{ctx,source} as any);
+  assert.equal((preview.data as any).binding.sourceHash,canonicalHash(source));
+  source.requested.size='999';
+  const prepared=await f.service.prepare(preview.data.previewId!);
+  assert.equal((prepared.data as any).source.requested.size,'1');
+  assert.equal((prepared.data as any).source.strategy,'lendAsset');
+});
+test('resolved context cannot relabel another account or outlive its original observation TTL', async()=>{
+ const f=fixture(),ctx=await f.context.pin(account);
+ await assert.rejects(f.service.preview(request,undefined,{ctx:{...ctx,account:profile.core},source:{}} as any),/DOMAIN_MISMATCH/);
+ f.advance();
+ await assert.rejects(f.service.preview(request,undefined,{ctx,source:{}} as any),/STALE_PREVIEW/);
+});
+test('strategy prepare failures route back to high-level preview, including expired IDs',async()=>{
+ const f=fixture(),ctx=await f.context.pin(account);
+ const p=await f.service.preview(request,undefined,{ctx,source:{strategy:'lendAsset'}});
+ f.change();await assert.rejects(f.service.prepare(p.data.previewId!), (e:any)=>e.code==='STATE_CHANGED'&&e.nextAction==='strategy_preview');
+ f.advance();await assert.rejects(f.service.prepare(p.data.previewId!), (e:any)=>e.code==='STALE_PREVIEW'&&e.nextAction==='strategy_preview');
+});

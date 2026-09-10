@@ -13,6 +13,9 @@ import { ActionError } from "../sdk/actions/types.ts";
 import { ActionContext } from "../sdk/actions/context.ts";
 import { createReadTools, READ_TOOL_SPECS } from "./tools/reads.ts";
 import { createActionTools, ACTION_TOOL_SPECS, loadPolicies } from "./tools/actions.ts";
+import { createStrategyTools, STRATEGY_TOOL_SPECS } from "./tools/strategies.ts";
+import { strategyCapabilities } from "../sdk/strategies/capabilities.ts";
+import type { StrategyFlowOptions } from "../sdk/actions/strategyFlow.ts";
 import { ActionService } from "../sdk/actions/preview.ts";
 import { OrderService } from "../sdk/actions/orders.ts";
 import { PublishJournal } from "../sdk/actions/orderJournal.ts";
@@ -62,10 +65,13 @@ export interface JsonRpcResponse {
 
 /** Injection points so the core can be driven without a network or a chain. */
 export interface McpDeps {
+  /** Host-only precompiled schemas for runtimes that prohibit dynamic code generation. */
+  schemaCompiler?: (schema:Record<string,unknown>)=>import("ajv").ValidateFunction;
   profile: DeploymentProfile;
   client?: BiviumClient;
   actionContext?: ActionContext;
   actionService?: ActionService;
+  strategyFlowOptions?: StrategyFlowOptions;
   policies?: { [id: string]: ConfiguredRiskPolicy };
   orderService?: OrderService;
   journal?: PublishJournal;
@@ -111,7 +117,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
   },
   {
     name: "strategy_plan",
-    description: "The quote plus a bounded execution plan: mode (intent | router | sequential — the last is NOT atomic), steps, and hard limits maxLoss / minOut / deadline / quoteId. Never executes; run the steps with the CLI under the user's key.",
+    description: "The quote plus a bounded execution plan: mode (intent | router | sequential — the last is NOT atomic), steps, and hard limits maxLoss / minOut / deadline / quoteId. Descriptive only; for the first four strategies use strategy_preview then action_prepare for unsigned wallet preparation.",
     inputSchema: {
       type: "object",
       required: ["strategy", "asset", "size", "maturity", "bufferPct"],
@@ -130,7 +136,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
     inputSchema: { type: "object", properties: { taker: { ...addressSchema, description: "the account address" } }, required: ["taker"], additionalProperties: false },
   },
 ].map(tool => ({...tool, annotations: READ_ONLY_ANNOTATIONS}));
-export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS, ...ACTION_TOOL_SPECS, ...ORDER_TOOL_SPECS, ...MM_TOOL_SPECS];
+export const TOOLS: ToolDef[] = [...LEGACY_TOOLS, ...READ_TOOL_SPECS, ...ACTION_TOOL_SPECS, ...ORDER_TOOL_SPECS, ...MM_TOOL_SPECS, ...STRATEGY_TOOL_SPECS];
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : typeof v === "number" ? String(v) : undefined;
@@ -184,7 +190,7 @@ export function createStrategyMcp(deps: McpDeps) {
   async function legacyCallTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
       case "strategy_list":
-        return { count: catalogJson().length, strategies: catalogJson() };
+        return { count: catalogJson().length, strategies: catalogJson().map(s => ({ ...s, capabilities: strategyCapabilities(s.id, profile) })) };
       case "market_list": {
         const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n })));
         const filters = (args.filters ?? {}) as Record<string, unknown>;
@@ -252,18 +258,19 @@ export function createStrategyMcp(deps: McpDeps) {
   }
 
   const actionContext = deps.actionContext ?? new ActionContext({ profile, markets: deps.overrides?.rows ? async () => deps.overrides!.rows!.map((r) => r.market) : undefined });
-  const registry = new ToolRegistry(LEGACY_TOOLS.map(tool => ({...tool, concurrency: tool.name === "strategy_list" ? "local" : "bounded", timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})));
+  const registry = new ToolRegistry(LEGACY_TOOLS.map(tool => ({...tool, concurrency: tool.name === "strategy_list" ? "local" : "bounded", timeoutMs: deps.requestTimeoutMs, handler: (args) => legacyCallTool(tool.name,args)})), deps.schemaCompiler);
   for (const tool of createReadTools(actionContext, { relayerWrites: deps.allowRelayerWrites ?? false, policyIds: Object.keys(deps.actionService?.policies ?? deps.policies ?? {}), tools: TOOLS.map(t => t.name) })) registry.register({...tool, concurrency: tool.name === "server_info" ? "local" : "managed"});
   const actionService = deps.actionService ?? new ActionService(actionContext, deps.policies ?? {});
   for (const tool of createActionTools(actionService)) registry.register(tool);
   const orderService = deps.orderService ?? new OrderService(actionContext, actionService, { journal: deps.journal, allowRelayerWrites: deps.allowRelayerWrites });
   for (const tool of createOrderTools(orderService)) registry.register(tool);
   for (const tool of createMarketAnalysisTools(actionContext, deps.actionService?.policies ?? deps.policies ?? {}, orderService.journal)) registry.register(tool);
+  for (const tool of createStrategyTools(actionService, deps.strategyFlowOptions)) registry.register(tool);
   for (const tool of deps.tools ?? []) registry.register(tool);
-  const callTool = (name: string, args: unknown) => registry.call(name,args);
+  const callTool = (name: string, args: unknown, context?: {signal?: AbortSignal}) => registry.call(name,args,context);
 
   /** One JSON-RPC message in → one response out (null for notifications). Never throws. */
-  async function handle(message: unknown): Promise<JsonRpcResponse | null> {
+  async function handle(message: unknown, context?: {signal?: AbortSignal}): Promise<JsonRpcResponse | null> {
     const req = message as Partial<JsonRpcRequest>;
     const id = req?.id ?? null;
     if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
@@ -287,7 +294,7 @@ export function createStrategyMcp(deps: McpDeps) {
           const name = typeof p.name === "string" ? p.name : "";
           const args = p.arguments === undefined ? {} : p.arguments;
           try {
-            const result = await callTool(name, args);
+            const result = await callTool(name, args, context);
             return { jsonrpc: "2.0", id, result: toolContent(result) };
           } catch (error) {
             // Tool-level failures are results with isError (the agent reads the message), not protocol errors.
@@ -360,6 +367,24 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const profile = loadProfile(profilePath);
   const policyIndex = argv.indexOf("--policy-file");
   const policies = policyIndex >= 0 ? loadPolicies(argv[policyIndex + 1]) : {};
+  const transportIndex = argv.indexOf("--transport");
+  const transport = transportIndex >= 0 ? argv[transportIndex + 1] : "stdio";
+  if (transport !== "stdio" && transport !== "http") throw new Error("--transport must be stdio or http");
+  if (transport === "http") {
+    if (argv.includes("--allow-relayer-writes")) throw new Error("HTTP transport does not enable relayer writes");
+    const option = (name:string, fallback:string) => { const at=argv.indexOf(name); if(at>=0&&!argv[at+1])throw new Error(`${name} requires a value`); return at>=0?argv[at+1]:fallback; };
+    const token = process.env[option("--auth-token-env","BIVIUM_MCP_TOKEN")] ?? "";
+    const {listenHttp} = await import("./http-node.ts");
+    const listener = await listenHttp({token,host:option("--host","127.0.0.1"),port:Number(option("--port","8787")),
+      allowedOrigins:argv.includes("--allowed-origin")?[option("--allowed-origin","")]:[],
+      createMcp:()=>createStrategyMcp({profile,client:new BiviumClient(profile),policies,allowRelayerWrites:false})});
+    process.stderr.write(`bivium-mcp: Streamable HTTP listening at ${listener.url}\n`);
+    let closing=false;
+    const stop=()=>{if(!closing){closing=true;void listener.close();}};
+    process.on("SIGINT",stop);process.on("SIGTERM",stop);
+    try {await once(listener.server,"close");} finally {process.off("SIGINT",stop);process.off("SIGTERM",stop);}
+    return;
+  }
   const journalIndex = argv.indexOf("--journal-dir");
   const journalPath = journalIndex >= 0 ? argv[journalIndex + 1] : join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "bivium", "mcp", `${profile.chainId}-${profile.core.toLowerCase()}`);
   if (!journalPath) throw new Error("--journal-dir requires a path");

@@ -7,3 +7,8 @@ node_modules/
 # `maker make-offer` writes a signed offer here by default, so running the CLI inside the repo leaves one
 # behind. They are per-run artifacts carrying a maker signature; none of them belongs in history.
 offer-*.json
+
+# Worker build output and local bindings/secrets
+.wrangler/
+.dev.vars*
+src/mcp/cloudflare/generated/
