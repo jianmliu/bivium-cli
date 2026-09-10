@@ -13,6 +13,7 @@ import { gateAbi, routerAbi } from '../strategyRouter.ts';
 import { entryFromSignedOffer, fillCost, offerActiveAt, sortSide, validateGroups, planSweepByFace, makerBackingKey, type BookEntry, type MakerBacking } from '../orderbook.ts';
 import { fetchRelayerBook } from '../relayer.ts';
 import { MAX_TICK, TICK_SPACING } from '../tick.ts';
+import { RATIFIED } from '../ratify.ts';
 import { ActionService, type ActionIntent } from './preview.ts';
 import type { ReadContext } from './context.ts';
 import { amount, tokenDecimals } from './reads.ts';
@@ -99,7 +100,19 @@ export class StrategyFlowService {
    if(!offerActiveAt(e.offer,ctx.timestamp)||same(e.offer.maker,input.account))continue;
    const key=makerBackingKey(e);let funds=backing.get(key);
    if(!funds){funds={liquidity:lending?0n:await context.core<bigint>(ctx,'liquidityOf',[market.id,e.offer.maker]),credit:lending?await context.core<bigint>(ctx,'creditOf',[market.id,e.offer.maker]):0n,escrow:lending?await context.core<bigint>(ctx,'collateralEscrowOf',[market.id,e.offer.maker]):0n};backing.set(key,funds);}
-   const plan=planSweepByFace([e],units,backing);if(plan.filled===units){selected=e;cost=uint(fillCost(e.offer,units,e.price),'cost',true);break;}
+   const plan=planSweepByFace([e],units,backing);
+   if(plan.filled!==units)continue;
+   // Definitive revocation is an unavailable order, not a reason to hide later executable liquidity.
+   // Transport failures still propagate through context.read and never become an empty-book result.
+   const registered=await context.core<boolean>(ctx,'isRatifier',[e.offer.maker,e.offer.ratifier]);
+   if(typeof registered!=='boolean')throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid ratifier registration response');
+   if(!registered)continue;
+   const ratifierArgs=[...context.adapter.ratifierArgs(e.offer.maker,units,e.commitment,e.signature)];
+   if(profile.abiProfile==='core-v2')ratifierArgs[1]=lending&&router?router:input.account;
+   const ratified=await context.read<string>(ctx,e.offer.ratifier,context.adapter.ratifierAbi,'isRatified',ratifierArgs);
+   if(typeof ratified!=='string'||!/^0x[0-9a-fA-F]{8}$/.test(ratified))throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid ratifier response');
+   if(ratified!==RATIFIED)continue;
+   selected=e;cost=uint(fillCost(e.offer,units,e.price),'cost',true);break;
   }
   if(!selected)throw new ActionError('INSUFFICIENT_LIQUIDITY','No single live order can fill the complete requested size; reduce size or use the separate order workflow');
   const fee=uint(lending?(units>cost?(units-cost)*feeBps/10000n:0n):originationFee(units,cost,feeBps),'fee');
