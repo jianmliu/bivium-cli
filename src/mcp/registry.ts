@@ -48,10 +48,10 @@ export function createConcurrencyLimiter(max = RPC_CONCURRENCY) {
 export class ToolRegistry {
  private entries = new Map<string, {definition: ToolDefinition; validate: ReturnType<typeof validator>}>();
  private limit = createConcurrencyLimiter();
- constructor(definitions: ToolDefinition[] = []) { for (const definition of definitions) this.register(definition); }
+ constructor(definitions: ToolDefinition[] = [], private readonly compile: typeof validator = validator) { for (const definition of definitions) this.register(definition); }
  register(definition: ToolDefinition): void {
   if (this.entries.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`);
-  this.entries.set(definition.name,{definition,validate:validator(definition.inputSchema)});
+  this.entries.set(definition.name,{definition,validate:this.compile(definition.inputSchema)});
  }
  list(): ToolDef[] { return [...this.entries.values()].map(({definition: {handler,timeoutMs,concurrency,...definition}}) => definition); }
  async call(name: string, args: unknown, context?: {signal?: AbortSignal}): Promise<unknown> {

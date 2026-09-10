@@ -1,0 +1,21 @@
+name = "bivium-mcp"
+main = "src/mcp/cloudflare/worker.ts"
+account_id = "ffd49d6c2ec63ba11ea74173a8adf5e2"
+compatibility_date = "2026-09-10"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+[build]
+command = "npm run mcp:worker:build"
+
+[limits]
+cpu_ms = 30000
+
+[[durable_objects.bindings]]
+name = "MCP"
+class_name = "McpCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["McpCoordinator"]

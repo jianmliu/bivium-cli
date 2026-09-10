@@ -124,6 +124,10 @@ separate. Core remains administrator-free and fee-free; optional gated series re
 own origination routes. The fee-inclusive program preview determines execution bounds; an
 indicative payoff quote is not automatically net of every cost.
 
+### Remote MCP over HTTP
+
+`bivium-mcp --transport http` adds authenticated Streamable HTTP alongside stdio. A Cloudflare Worker deployment uses `/mcp`, per-client sessions, precompiled schemas and the conservative risk policy. Wallet signing remains external. See [HTTP setup, deployment and client headers](docs/mcp-http.md).
+
 ### MCP: reads, unsigned preparation and optional relayer publication
 
 `bivium-mcp` exposes the shared strategy engine over MCP stdio for clients that prefer tool calls:

@@ -81,3 +81,7 @@ One writer owns a journal directory. The default limit is 1,000 records; overflo
 ### Borrow authorization lifetime
 
 Unsigned borrowing prerequisites grant only `CAP_FILL`, with expiry at the execution deadline plus a five-minute repreview allowance (without uint256 overflow). After the grant receipt, obtain a fresh `strategy_preview`; its transaction still enforces its own deadline and economic limits. Expired grants require renewal. Revoking the Core grant after a one-off test removes the remaining authority; ERC-20 allowances are separate and should also be checked.
+
+### Remote HTTP connection
+
+The server also supports Streamable HTTP at `/mcp` (protocol 2025-06-18, JSON responses). Supply the deployment's Bearer token through the client Authorization header, never through the URL or tool arguments. HTTP 404 for a session means initialize again and repeat the strategy preview; a preview ID cannot cross sessions. `conservative` is the Cloudflare policy ID; it does not accept unknown risk evidence or mock-token mintability by default. Signing remains in the external wallet, and remote relayer writes are disabled. Full deployment instructions live in the repository's `docs/mcp-http.md`.
