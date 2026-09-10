@@ -1,0 +1,526 @@
+{
+  "scope": "Read-only real relayer/RPC. Diagnostic account only; not complete wallet acceptance. No risk override, signing, broadcast or state override.",
+  "strategyCalls": {
+    "at": "2026-09-10T16:06:37.109Z",
+    "accountPurpose": "Unfunded diagnostic address, not user account",
+    "outcomes": [
+      {
+        "input": {
+          "strategy": "lendAsset",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 29.5337,
+          "account": "0x000000000000000000000000000000000000dEaD",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "policyId": "conservative",
+          "collateralKind": "meme",
+          "evidence": {}
+        },
+        "response": {
+          "schemaVersion": 1,
+          "data": {
+            "previewId": null,
+            "risk": {
+              "market": "0x9d13901081dc17f2cf393ce7763d79b4631099240964fd8cec0bc7a1960b2f5e",
+              "facts": [],
+              "warnings": [
+                {
+                  "code": "MEME_DELIVERY_RISK",
+                  "severity": "warning",
+                  "message": "After a Meme collapse, the borrower may rationally not repay; the lender may receive severely impaired or worthless Meme. No-liquidation settlement can operate correctly while all economically recoverable principal is lost. Core does not approve assets; it is permissionless."
+                }
+              ],
+              "unknowns": [
+                "mintable",
+                "freezable",
+                "blacklistable",
+                "upgradeable",
+                "sellability",
+                "top10HolderPct",
+                "exitSlippageBps",
+                "referencePrice"
+              ],
+              "decision": "require_user_confirmation",
+              "decisionSource": "agent-policy"
+            },
+            "source": {
+              "requested": {
+                "strategy": "lendAsset",
+                "asset": "mCASHCAT",
+                "size": "1",
+                "maturity": "1789372800",
+                "bufferPct": 29.5337,
+                "account": "0x000000000000000000000000000000000000dEaD",
+                "maxInput": "1",
+                "slippageBps": 100,
+                "policyId": "conservative",
+                "collateralKind": "meme",
+                "evidence": {}
+              },
+              "market": {
+                "id": "0x9d13901081dc17f2cf393ce7763d79b4631099240964fd8cec0bc7a1960b2f5e",
+                "params": {
+                  "loanToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+                  "collateralToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+                  "maturity": "1789372800",
+                  "strike": "4000000000000000000000000000000000000000000000000",
+                  "allowPartialRepay": true,
+                  "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+                },
+                "firstSeenBlock": "113083417",
+                "discovery": {
+                  "source": "https://bivium-robinhood.pages.dev/api/markets",
+                  "observedAt": "2026-09-10T16:06:28.069Z",
+                  "confirmedThrough": "116952537",
+                  "coverage": "complete",
+                  "stale": false
+                }
+              },
+              "selectedOrder": {
+                "commitment": "0xe235676fe0b482c65e4adf8485f3fce2cbd95239b094179659ce75f113987c71",
+                "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+                "maker": "0xE66edaD6148E0d1273793e283F0b8224E5f1F935",
+                "units": "1000000000000000000"
+              },
+              "spot": {
+                "px": "193000000000000005",
+                "status": "ready",
+                "pair": "BUSD-MCASHCAT"
+              },
+              "realizedBufferPct": 29.53367875647668,
+              "route": {
+                "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+                "lenderMustRoute": true,
+                "feeBps": "1000"
+              },
+              "economics": {
+                "face": {
+                  "raw": "1000000000000000000",
+                  "decimals": 18,
+                  "human": "1",
+                  "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+                },
+                "cost": {
+                  "raw": "997086329032274611",
+                  "decimals": 18,
+                  "human": "0.997086329032274611",
+                  "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+                },
+                "fee": {
+                  "raw": "291367096772538",
+                  "decimals": 18,
+                  "human": "0.000291367096772538",
+                  "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+                },
+                "loanPaid": {
+                  "raw": "997377696129047149",
+                  "decimals": 18,
+                  "human": "0.997377696129047149",
+                  "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+                },
+                "maxInput": {
+                  "raw": "1000000000000000000",
+                  "decimals": 18,
+                  "human": "1",
+                  "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+                }
+              },
+              "swap": null
+            },
+            "analysisOnly": true
+          },
+          "snapshot": null,
+          "warnings": [
+            {
+              "code": "MEME_DELIVERY_RISK",
+              "severity": "warning",
+              "message": "After a Meme collapse, the borrower may rationally not repay; the lender may receive severely impaired or worthless Meme. No-liquidation settlement can operate correctly while all economically recoverable principal is lost. Core does not approve assets; it is permissionless."
+            }
+          ],
+          "nextActions": []
+        }
+      },
+      {
+        "input": {
+          "strategy": "lendQuote",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 27.4611,
+          "account": "0x000000000000000000000000000000000000dEaD",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "policyId": "conservative",
+          "collateralKind": "meme",
+          "evidence": {}
+        },
+        "response": {
+          "schemaVersion": 1,
+          "data": {
+            "previewId": null,
+            "risk": {
+              "market": "0xfbbec50b185bdf5fc1d1492b473bd09b50d30ca71fd6837e0333e058ecf31ede",
+              "facts": [],
+              "warnings": [
+                {
+                  "code": "MEME_DELIVERY_RISK",
+                  "severity": "warning",
+                  "message": "After a Meme collapse, the borrower may rationally not repay; the lender may receive severely impaired or worthless Meme. No-liquidation settlement can operate correctly while all economically recoverable principal is lost. Core does not approve assets; it is permissionless."
+                }
+              ],
+              "unknowns": [
+                "mintable",
+                "freezable",
+                "blacklistable",
+                "upgradeable",
+                "sellability",
+                "top10HolderPct",
+                "exitSlippageBps",
+                "referencePrice"
+              ],
+              "decision": "require_user_confirmation",
+              "decisionSource": "agent-policy"
+            },
+            "source": {
+              "requested": {
+                "strategy": "lendQuote",
+                "asset": "mCASHCAT",
+                "size": "1",
+                "maturity": "1789372800",
+                "bufferPct": 27.4611,
+                "account": "0x000000000000000000000000000000000000dEaD",
+                "maxInput": "1",
+                "slippageBps": 100,
+                "policyId": "conservative",
+                "collateralKind": "meme",
+                "evidence": {}
+              },
+              "market": {
+                "id": "0xfbbec50b185bdf5fc1d1492b473bd09b50d30ca71fd6837e0333e058ecf31ede",
+                "params": {
+                  "loanToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+                  "collateralToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+                  "maturity": "1789372800",
+                  "strike": "140000000000000000000000",
+                  "allowPartialRepay": false,
+                  "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+                },
+                "firstSeenBlock": "113083567",
+                "discovery": {
+                  "source": "https://bivium-robinhood.pages.dev/api/markets",
+                  "observedAt": "2026-09-10T16:06:31.241Z",
+                  "confirmedThrough": "116952537",
+                  "coverage": "complete",
+                  "stale": false
+                }
+              },
+              "selectedOrder": {
+                "commitment": "0x23a672e40292f9c922740c6922d1dbd2bbd242efa65f66c3ed59647183909228",
+                "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+                "maker": "0xE66edaD6148E0d1273793e283F0b8224E5f1F935",
+                "units": "1000000"
+              },
+              "spot": {
+                "px": "193000000000000005",
+                "status": "ready",
+                "pair": "MCASHCAT-BUSD"
+              },
+              "realizedBufferPct": 27.461139896373055,
+              "route": {
+                "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+                "lenderMustRoute": true,
+                "feeBps": "1000"
+              },
+              "economics": {
+                "face": {
+                  "raw": "1000000",
+                  "decimals": 6,
+                  "human": "1",
+                  "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+                },
+                "cost": {
+                  "raw": "997200",
+                  "decimals": 6,
+                  "human": "0.9972",
+                  "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+                },
+                "fee": {
+                  "raw": "280",
+                  "decimals": 6,
+                  "human": "0.00028",
+                  "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+                },
+                "loanPaid": {
+                  "raw": "997480",
+                  "decimals": 6,
+                  "human": "0.99748",
+                  "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+                },
+                "maxInput": {
+                  "raw": "1000000",
+                  "decimals": 6,
+                  "human": "1",
+                  "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+                }
+              },
+              "swap": null
+            },
+            "analysisOnly": true
+          },
+          "snapshot": null,
+          "warnings": [
+            {
+              "code": "MEME_DELIVERY_RISK",
+              "severity": "warning",
+              "message": "After a Meme collapse, the borrower may rationally not repay; the lender may receive severely impaired or worthless Meme. No-liquidation settlement can operate correctly while all economically recoverable principal is lost. Core does not approve assets; it is permissionless."
+            }
+          ],
+          "nextActions": []
+        }
+      },
+      {
+        "input": {
+          "strategy": "short",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 29.5337,
+          "account": "0x000000000000000000000000000000000000dEaD",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "maxPriceImpactBps": 500,
+          "policyId": "conservative",
+          "collateralKind": "meme",
+          "evidence": {}
+        },
+        "response": {
+          "code": "INSUFFICIENT_LIQUIDITY",
+          "message": "INSUFFICIENT_LIQUIDITY: No single live order can fill the complete requested size; reduce size or use the separate order workflow",
+          "retryable": false
+        }
+      },
+      {
+        "input": {
+          "strategy": "leveredLong",
+          "asset": "mCASHCAT",
+          "size": "1",
+          "maturity": "1789372800",
+          "bufferPct": 27.4611,
+          "account": "0x000000000000000000000000000000000000dEaD",
+          "maxInput": "1",
+          "slippageBps": 100,
+          "maxPriceImpactBps": 500,
+          "policyId": "conservative",
+          "collateralKind": "meme",
+          "evidence": {}
+        },
+        "response": {
+          "code": "INSUFFICIENT_LIQUIDITY",
+          "message": "INSUFFICIENT_LIQUIDITY: No single live order can fill the complete requested size; reduce size or use the separate order workflow",
+          "retryable": false
+        }
+      }
+    ]
+  },
+  "backing": {
+    "snapshot": {
+      "chainId": 46630,
+      "core": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
+      "blockNumber": "116962838",
+      "blockHash": "0x0d2ce8b534913d6e7b91c5ec73f5bf332256cc35646b27b2326767c5e21faefb",
+      "blockTimestamp": "1789056413",
+      "observedAt": "2026-09-10T16:06:54.760Z",
+      "coverage": "complete",
+      "omitted": []
+    },
+    "orders": [
+      {
+        "market": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+        "side": "ask",
+        "commitment": "0x3ccbb3febf5a04c64f91378a7f2d1ac7537da992d88fabc1cc1c8b548d347958",
+        "face": "2000000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0xf96767b1718dc6bd4b5c641c7cd1ae864ba915e0cc83d0469db69135d35eafc1",
+        "side": "ask",
+        "commitment": "0xad7c4507923dec4fc011c2016c8b75ff569137ffb0dce8b2b95ded6473f3b84c",
+        "face": "2000000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0x9d13901081dc17f2cf393ce7763d79b4631099240964fd8cec0bc7a1960b2f5e",
+        "side": "ask",
+        "commitment": "0x423a5f567cd58c1ae803d7c024795417e8f6fc42a8a43b948c57048cfcbbde73",
+        "face": "1600000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0x9d13901081dc17f2cf393ce7763d79b4631099240964fd8cec0bc7a1960b2f5e",
+        "side": "ask",
+        "commitment": "0xe235676fe0b482c65e4adf8485f3fce2cbd95239b094179659ce75f113987c71",
+        "face": "1600000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0xe39e0a5af6a05484802ad6b9233850ac739bd3c1e9cd20455e3a24e4ccf3a39f",
+        "side": "ask",
+        "commitment": "0x3643ddd15e6819a8184c2116129aab695ce93836e97b5a0a6742e0e7fa41cf0d",
+        "face": "1000000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0xe39e0a5af6a05484802ad6b9233850ac739bd3c1e9cd20455e3a24e4ccf3a39f",
+        "side": "ask",
+        "commitment": "0x4b45ba016fb9970d45f14f734aee9bc87d92cb163695c3f0b0848b065e170ca8",
+        "face": "1000000000000000000000",
+        "consumed": "0",
+        "liquidity": "5000000000000000000000",
+        "credit": "0",
+        "escrow": "2000000000"
+      },
+      {
+        "market": "0xaf1232a1c6d9dd4537f4d7c3177d5c9c105036fd05d05d9b636b20c44c92f733",
+        "side": "ask",
+        "commitment": "0x2a0348eef07052a237e715f1682792375f628cdfc257e554eed5c9ecc007ada8",
+        "face": "400000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0xaf1232a1c6d9dd4537f4d7c3177d5c9c105036fd05d05d9b636b20c44c92f733",
+        "side": "ask",
+        "commitment": "0xd2ccfadf5fedd96f8033ccacc56503bca0155abed321c948b40c380159140532",
+        "face": "400000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0xfbbec50b185bdf5fc1d1492b473bd09b50d30ca71fd6837e0333e058ecf31ede",
+        "side": "ask",
+        "commitment": "0x23a672e40292f9c922740c6922d1dbd2bbd242efa65f66c3ed59647183909228",
+        "face": "300000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0xfbbec50b185bdf5fc1d1492b473bd09b50d30ca71fd6837e0333e058ecf31ede",
+        "side": "ask",
+        "commitment": "0x6fb876c9d39eff30761139533b9c908b26642333116a07ecda1281d76e730bc6",
+        "face": "400000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0x542d8f45b90559d689fc1fea277ce9d814e676ab546a2ef6bbbdc1973ed0e474",
+        "side": "ask",
+        "commitment": "0x04a0c6b33497986a449e5868d503d877b664f9315934eccf529ccfae7fad29d7",
+        "face": "100000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0x542d8f45b90559d689fc1fea277ce9d814e676ab546a2ef6bbbdc1973ed0e474",
+        "side": "ask",
+        "commitment": "0x4f319b38cbc1f680d28dd4b17eca86f7f3beaca1c5192a61426eed83078b769a",
+        "face": "400000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0x542d8f45b90559d689fc1fea277ce9d814e676ab546a2ef6bbbdc1973ed0e474",
+        "side": "ask",
+        "commitment": "0x5da28bfd7a37ad2b69d392a65f6869ca4b995279827d810846943be09549d2e3",
+        "face": "400000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      },
+      {
+        "market": "0x542d8f45b90559d689fc1fea277ce9d814e676ab546a2ef6bbbdc1973ed0e474",
+        "side": "ask",
+        "commitment": "0xeab8989affa6de630877615f7a25c2d839d1a8ee46006055e75c03d2ff7ec651",
+        "face": "100000000",
+        "consumed": "0",
+        "liquidity": "2000000000",
+        "credit": "0",
+        "escrow": "5000000000000000000000"
+      }
+    ]
+  },
+  "pool": {
+    "snapshot": {
+      "chainId": 46630,
+      "core": "0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4",
+      "blockNumber": "116963196",
+      "blockHash": "0x7938fcee81570c16b66b9b781c87aac1b58f711bcb625e711a67432917ad3f4c",
+      "blockTimestamp": "1789056461",
+      "observedAt": "2026-09-10T16:07:42.312Z",
+      "coverage": "complete",
+      "omitted": []
+    },
+    "key": {
+      "currency0": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+      "currency1": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+      "fee": 3000,
+      "tickSpacing": 60,
+      "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "sqrtPriceX96": "42891627472064983987271",
+    "liquidity": "3200000000000000",
+    "probes": [
+      {
+        "tokenIn": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+        "amountIn": "1000000000000000000",
+        "floor": {
+          "minOut": "289229",
+          "source": "pool-depth",
+          "estimate": "292151",
+          "slippageBps": 100,
+          "impactBps": 1
+        }
+      },
+      {
+        "tokenIn": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+        "amountIn": "1000000",
+        "floor": {
+          "minOut": "3365848787333544746",
+          "source": "pool-depth",
+          "estimate": "3399847259932873481",
+          "slippageBps": 100,
+          "impactBps": 5
+        }
+      }
+    ]
+  }
+}
