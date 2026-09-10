@@ -1,0 +1,398 @@
+{
+  "startedAt": "2026-09-10T16:24:39.229Z",
+  "finishedAt": "2026-09-10T16:26:43.376Z",
+  "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+  "chainId": 46630,
+  "policy": {
+    "scope": "User-authorized mock-token testnet acceptance only",
+    "source": "user-policy",
+    "rules": {
+      "rejectArbitraryMint": false,
+      "rejectUnsellable": true,
+      "confirmOnUnknown": false
+    }
+  },
+  "balances": {
+    "at": "2026-09-10T16:26:47.962Z",
+    "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+    "tokens": [
+      {
+        "symbol": "bUSD",
+        "balance": "9.00252",
+        "allowance": "0"
+      },
+      {
+        "symbol": "mCASHCAT",
+        "balance": "9.002570654817547449",
+        "allowance": "0"
+      }
+    ]
+  },
+  "outcomes": [
+    {
+      "strategy": "lendAsset",
+      "input": {
+        "strategy": "lendAsset",
+        "asset": "mCASHCAT",
+        "size": "1",
+        "maturity": "1789372800",
+        "bufferPct": 29.5337,
+        "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+        "maxInput": "1",
+        "slippageBps": 100,
+        "policyId": "testnet-acceptance",
+        "collateralKind": "other",
+        "evidence": {
+          "mintable": {
+            "state": "observed",
+            "value": true,
+            "source": "Local MockToken source and successful permissionless mint receipts"
+          }
+        }
+      },
+      "transactions": [
+        {
+          "kind": "prerequisites",
+          "functionName": "approve",
+          "to": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+          "hash": "0x60ca47015fdd4973fdb87ee1682f8e7d2228a90ce16ecf2976eba7736b3c9ab2",
+          "status": "success",
+          "blockNumber": "116970688",
+          "gasUsed": "53211"
+        },
+        {
+          "kind": "ready",
+          "functionName": "execute",
+          "to": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+          "hash": "0xb210530332e826c868543a869d1f2daf777aa5cdd15a2516af9e7a647200e7d7",
+          "status": "success",
+          "blockNumber": "116970778",
+          "gasUsed": "306775"
+        }
+      ],
+      "status": "executed_verified",
+      "before": {
+        "blockNumber": "116970666",
+        "balances": {
+          "bUSD": "10000000",
+          "mCASHCAT": "10000000000000000000"
+        },
+        "credit": "0",
+        "position": {
+          "debt": "0",
+          "collateral": "0",
+          "collateralWithdrawable": "0"
+        }
+      },
+      "after": {
+        "blockNumber": "116970778",
+        "balances": {
+          "bUSD": "10000000",
+          "mCASHCAT": "9002570654817547449"
+        },
+        "credit": "1000000000000000000"
+      },
+      "postconditionNote": "Rechecked at exact execution receipt block after original latest-block snapshot mismatch",
+      "resolution": {
+        "market": {
+          "id": "0x9d13901081dc17f2cf393ce7763d79b4631099240964fd8cec0bc7a1960b2f5e",
+          "params": {
+            "loanToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+            "collateralToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+            "maturity": "1789372800",
+            "strike": "4000000000000000000000000000000000000000000000000",
+            "allowPartialRepay": true,
+            "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+          },
+          "firstSeenBlock": "113083417",
+          "discovery": {
+            "source": "https://bivium-robinhood.pages.dev/api/markets",
+            "observedAt": "2026-09-10T16:24:51.487Z",
+            "confirmedThrough": "116962670",
+            "coverage": "complete",
+            "stale": false
+          }
+        },
+        "selectedOrder": {
+          "commitment": "0x9d2fc48d7f4d37552e261ef0c62885d887ce1a97a2161dcb2e158ab8f58d68dd",
+          "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+          "maker": "0xE66edaD6148E0d1273793e283F0b8224E5f1F935",
+          "units": "1000000000000000000"
+        },
+        "route": {
+          "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+          "lenderMustRoute": true,
+          "feeBps": "1000"
+        },
+        "economics": {
+          "face": {
+            "raw": "1000000000000000000",
+            "decimals": 18,
+            "human": "1",
+            "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+          },
+          "cost": {
+            "raw": "997143716869391724",
+            "decimals": 18,
+            "human": "0.997143716869391724",
+            "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+          },
+          "fee": {
+            "raw": "285628313060827",
+            "decimals": 18,
+            "human": "0.000285628313060827",
+            "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+          },
+          "loanPaid": {
+            "raw": "997429345182452551",
+            "decimals": 18,
+            "human": "0.997429345182452551",
+            "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+          },
+          "maxInput": {
+            "raw": "1000000000000000000",
+            "decimals": 18,
+            "human": "1",
+            "token": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D"
+          }
+        }
+      }
+    },
+    {
+      "strategy": "lendQuote",
+      "input": {
+        "strategy": "lendQuote",
+        "asset": "mCASHCAT",
+        "size": "1",
+        "maturity": "1789372800",
+        "bufferPct": 27.4611,
+        "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+        "maxInput": "1",
+        "slippageBps": 100,
+        "policyId": "testnet-acceptance",
+        "collateralKind": "meme",
+        "evidence": {
+          "mintable": {
+            "state": "observed",
+            "value": true,
+            "source": "Local MockToken source and successful permissionless mint receipts"
+          }
+        }
+      },
+      "transactions": [
+        {
+          "kind": "prerequisites",
+          "functionName": "approve",
+          "to": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+          "hash": "0x1b8dea4fbadac2b959fa35df1c7a551550c9492177e1aa8b56cb493674059fbe",
+          "status": "success",
+          "blockNumber": "116971315",
+          "gasUsed": "53151"
+        }
+      ],
+      "status": "blocked_preview",
+      "before": {
+        "blockNumber": "116971300",
+        "balances": {
+          "bUSD": "10000000",
+          "mCASHCAT": "9002570654817547449"
+        },
+        "credit": "0",
+        "position": {
+          "debt": "0",
+          "collateral": "0",
+          "collateralWithdrawable": "0"
+        }
+      },
+      "failure": {
+        "code": "TOOL_FAILED",
+        "message": "spot unavailable for MCASHCAT-BUSD (profile.relayerUrl /spot) \u2014 the engine cannot place a strike buffer without it",
+        "retryable": false
+      }
+    },
+    {
+      "strategy": "short",
+      "input": {
+        "strategy": "short",
+        "asset": "mCASHCAT",
+        "size": "1",
+        "maturity": "1789372800",
+        "bufferPct": 29.5337,
+        "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+        "maxInput": "1",
+        "slippageBps": 100,
+        "maxPriceImpactBps": 500,
+        "policyId": "testnet-acceptance",
+        "collateralKind": "other",
+        "evidence": {
+          "mintable": {
+            "state": "observed",
+            "value": true,
+            "source": "Local MockToken source and successful permissionless mint receipts"
+          }
+        }
+      },
+      "transactions": [],
+      "status": "blocked_preview",
+      "failure": {
+        "code": "INSUFFICIENT_LIQUIDITY",
+        "message": "INSUFFICIENT_LIQUIDITY: No single live order can fill the complete requested size; reduce size or use the separate order workflow",
+        "retryable": false
+      }
+    },
+    {
+      "strategy": "leveredLong",
+      "input": {
+        "strategy": "leveredLong",
+        "asset": "mCASHCAT",
+        "size": "1",
+        "maturity": "1789372800",
+        "bufferPct": 27.4611,
+        "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+        "maxInput": "1",
+        "slippageBps": 100,
+        "maxPriceImpactBps": 500,
+        "policyId": "testnet-acceptance",
+        "collateralKind": "meme",
+        "evidence": {
+          "mintable": {
+            "state": "observed",
+            "value": true,
+            "source": "Local MockToken source and successful permissionless mint receipts"
+          }
+        }
+      },
+      "transactions": [],
+      "status": "blocked_preview",
+      "failure": {
+        "code": "INSUFFICIENT_LIQUIDITY",
+        "message": "INSUFFICIENT_LIQUIDITY: No single live order can fill the complete requested size; reduce size or use the separate order workflow",
+        "retryable": false
+      }
+    },
+    {
+      "strategy": "lendQuote",
+      "input": {
+        "strategy": "lendQuote",
+        "asset": "mCASHCAT",
+        "size": "1",
+        "maturity": "1789372800",
+        "bufferPct": 27.4611,
+        "account": "0xCc90b98499214Fb29EC6918697817e639318c046",
+        "maxInput": "1",
+        "slippageBps": 100,
+        "policyId": "testnet-acceptance",
+        "collateralKind": "meme",
+        "evidence": {
+          "mintable": {
+            "state": "observed",
+            "value": true,
+            "source": "Local MockToken source and successful permissionless mint receipts"
+          }
+        }
+      },
+      "transactions": [
+        {
+          "kind": "ready",
+          "functionName": "execute",
+          "to": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+          "hash": "0x759574b46e71f1bdcfa16c664014aa3a2ca05723c59dd5ac9f5ac6533edf75a8",
+          "status": "success",
+          "blockNumber": "116971642",
+          "gasUsed": "304981"
+        }
+      ],
+      "status": "executed",
+      "before": {
+        "blockNumber": "116971635",
+        "balances": {
+          "bUSD": "10000000",
+          "mCASHCAT": "9002570654817547449"
+        },
+        "credit": "0",
+        "position": {
+          "debt": "0",
+          "collateral": "0",
+          "collateralWithdrawable": "0"
+        }
+      },
+      "after": {
+        "blockNumber": "116971642",
+        "balances": {
+          "bUSD": "9002520",
+          "mCASHCAT": "9002570654817547449"
+        },
+        "credit": "1000000",
+        "position": {
+          "debt": "0",
+          "collateral": "0",
+          "collateralWithdrawable": "0"
+        }
+      },
+      "resolution": {
+        "market": {
+          "id": "0xfbbec50b185bdf5fc1d1492b473bd09b50d30ca71fd6837e0333e058ecf31ede",
+          "params": {
+            "loanToken": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717",
+            "collateralToken": "0x34a456c0365B78c5E04b97dee228207cf9CaB35D",
+            "maturity": "1789372800",
+            "strike": "140000000000000000000000",
+            "allowPartialRepay": false,
+            "gate": "0x8115B27543D42006C15DDDE54477c3b985D05197"
+          },
+          "firstSeenBlock": "113083567",
+          "discovery": {
+            "source": "https://bivium-robinhood.pages.dev/api/markets",
+            "observedAt": "2026-09-10T16:26:32.383Z",
+            "confirmedThrough": "116962670",
+            "coverage": "complete",
+            "stale": false
+          }
+        },
+        "selectedOrder": {
+          "commitment": "0xafcd69854f74388b5f917ddf25f6abc533251f10fa1de61ff55c2cd1dc528258",
+          "ratifier": "0x3209e5C85c93d4fD352be018f4777007D2619fb3",
+          "maker": "0xE66edaD6148E0d1273793e283F0b8224E5f1F935",
+          "units": "1000000"
+        },
+        "route": {
+          "router": "0xDeD0545C0F83db95f3D5A674d1Dbc6836F0c2696",
+          "lenderMustRoute": true,
+          "feeBps": "1000"
+        },
+        "economics": {
+          "face": {
+            "raw": "1000000",
+            "decimals": 6,
+            "human": "1",
+            "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+          },
+          "cost": {
+            "raw": "997200",
+            "decimals": 6,
+            "human": "0.9972",
+            "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+          },
+          "fee": {
+            "raw": "280",
+            "decimals": 6,
+            "human": "0.00028",
+            "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+          },
+          "loanPaid": {
+            "raw": "997480",
+            "decimals": 6,
+            "human": "0.99748",
+            "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+          },
+          "maxInput": {
+            "raw": "1000000",
+            "decimals": 6,
+            "human": "1",
+            "token": "0x628626dE13DD4B5b1cb80d468c261C15dF00D717"
+          }
+        }
+      }
+    }
+  ]
+}
