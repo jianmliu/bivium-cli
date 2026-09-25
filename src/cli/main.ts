@@ -18,6 +18,7 @@ import {
   principalForUnits,
   type DiscoveredMarket,
   fetchPairRatio,
+  type PairRatio,
   floorFromStrike,
   pairFor,
   createWalletFile,
@@ -699,7 +700,8 @@ const { params, loanDecimals, collateralDecimals } = market;
     // pair feed. S ≥ R means the collateral no longer covers the debt it backs — the borrower's rational
     // strategy is delivery, so a bid near par is a guaranteed loss, whichever leg is the volatile one.
     if (pair) {
-      const spot = await fetchPairRatio(ctx.profile.relayerUrl, pair);
+      const spot = await fetchPairRatio(ctx.profile, pair, params);
+      if (spot?.mock) console.error(`note: ${mockReferenceLabel(spot)}`);
       let strikeRatio: string | null = null;
       try { strikeRatio = floorFromStrike(params.strike, loanDecimals, collateralDecimals); } catch { strikeRatio = null; }
       const money = spot !== null && strikeRatio !== null ? assessMoneyness(strikeRatio, spot.loanPerCollateral) : null;
@@ -849,7 +851,7 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
   const active = markets.filter((m) => m.params.maturity > now);
   if (active.length === 0) fail("no active (unmatured) markets found");
   const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
-  const spots = new Map<string, number | null>();
+  const spots = new Map<string, PairRatio | null>();
   const rows: WizardMarketRow[] = [];
   for (const m of active) {
     const loan = bySymbol.get(m.params.loanToken.toLowerCase());
@@ -859,15 +861,17 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     let floor = "?";
     try { floor = floorFromStrike(m.params.strike, loanDec, collDec); } catch { /* off-grid */ }
     const pair = pairFor(coll?.sym, loan?.sym);
-    if (pair && !spots.has(pair)) spots.set(pair, (await fetchPairRatio(ctx.profile.relayerUrl, pair))?.loanPerCollateral ?? null);
-    const spot = pair ? spots.get(pair) ?? null : null;
-    const money = spot !== null && floor !== "?" ? assessMoneyness(floor, spot) : null;
+    const spotKey = `${m.params.collateralToken.toLowerCase()}:${m.params.loanToken.toLowerCase()}`;
+    if (pair && !spots.has(spotKey)) spots.set(spotKey, await fetchPairRatio(ctx.profile, pair, m.params));
+    const spot = pair ? spots.get(spotKey) ?? null : null;
+    const money = spot !== null && floor !== "?" ? assessMoneyness(floor, spot.loanPerCollateral) : null;
     const state = await c.marketState(m.id);
     const date = new Date(Number(m.params.maturity) * 1000).toISOString().slice(0, 10);
     const loanSym = loan?.sym ?? m.params.loanToken.slice(0, 8);
     const collSym = coll?.sym ?? m.params.collateralToken.slice(0, 8);
     const flags = [
       m.params.gate === ZERO_ADDRESS ? "" : "[gated]",
+      spot?.mock ? `[${mockReferenceLabel(spot)}]` : '',
       money === null ? "" : money.itm ? `[ITM ⚠ LTV ${(money.ratio * 100).toFixed(0)}%]` : `[OTM · LTV ${(money.ratio * 100).toFixed(0)}%]`,
     ].filter(Boolean).join(" ");
     rows.push({
@@ -1078,10 +1082,11 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     }
     const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
     // Display-only pair ratios for moneyness flags; one fetch per pair, failures degrade to "?".
-    const spots = new Map<string, number | null>();
+    const spots = new Map<string, PairRatio | null>();
     for (const m of markets) {
       const pair = pairFor(bySymbol.get(m.params.collateralToken.toLowerCase())?.sym, bySymbol.get(m.params.loanToken.toLowerCase())?.sym);
-      if (pair && !spots.has(pair)) spots.set(pair, (await fetchPairRatio(ctx.profile.relayerUrl, pair))?.loanPerCollateral ?? null);
+      const spotKey = `${m.params.collateralToken.toLowerCase()}:${m.params.loanToken.toLowerCase()}`;
+      if (pair && !spots.has(spotKey)) spots.set(spotKey, await fetchPairRatio(ctx.profile, pair, m.params));
     }
     const lines: string[] = [];
     const rows = [];
@@ -1092,12 +1097,14 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       let floor = "?";
       if (loan && coll) { try { floor = floorFromStrike(m.params.strike, loan.dec, coll.dec); } catch { floor = "(off-grid)"; } }
       const marketPair = pairFor(coll?.sym, loan?.sym);
-      const spot = marketPair ? spots.get(marketPair) ?? null : null;
-      const money = spot !== null && floor !== "?" && floor !== "(off-grid)" ? assessMoneyness(floor, spot) : null;
+      const spotKey = `${m.params.collateralToken.toLowerCase()}:${m.params.loanToken.toLowerCase()}`;
+      const spot = marketPair ? spots.get(spotKey) ?? null : null;
+      const money = spot !== null && floor !== "?" && floor !== "(off-grid)" ? assessMoneyness(floor, spot.loanPerCollateral) : null;
       const moneyLabel = money === null ? "" : money.itm ? `  LTV ${(money.ratio * 100).toFixed(0)}% [ITM ⚠ the collateral no longer covers the debt]` : `  LTV ${(money.ratio * 100).toFixed(0)}% OTM`;
       const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
-      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money });
+      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money, ...(spot?.mock ? { spotReference: spot } : {}) });
       lines.push(`${pair}  strike ${floor.startsWith("(") || floor === "?" ? floor : fmtStrikeUnit(floor, loan?.sym ?? "loan", coll?.sym ?? "coll")}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}${moneyLabel}\n    ${m.id}`);
+      if (spot?.mock) lines.push(`    ${mockReferenceLabel(spot)}`);
     }
     output(ctx.json, { source, count: markets.length, markets: rows },
       markets.length === 0 ? "no touched markets found in the scanned range" : lines.join("\n"));
@@ -1163,7 +1170,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
     const collInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.collateralToken);
     const loanInfo = Object.entries(ctx.profile.tokens ?? {}).find(([, t]) => t.address === market.params.loanToken);
     const pair = pairFor(collInfo?.[0], loanInfo?.[0]);
-    const ratio = pair ? await fetchPairRatio(ctx.profile.relayerUrl, pair) : null;
+    const ratio = pair ? await fetchPairRatio(ctx.profile, pair, market.params) : null;
     const collateralUnits = Number(freed) / 10 ** market.collateralDecimals;
     const debtUnits = Number(position.debt) / 10 ** market.loanDecimals;
     const bound = ratio ? maxSettleableFloor(collateralUnits, debtUnits, ratio.loanPerCollateral) : null;
@@ -1176,10 +1183,12 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       dutchCapNow: fmtC(cap), settleWindowSeconds: window.toString(),
       settleableFloorBound: bound === null ? null : bound.toFixed(6),
       settleableKeepBpsBound: boundBps,
+      ...(ratio?.mock ? { spotReference: ratio } : {}),
     }, [
       `armed ${auth.enabled} | keep >= ${pct(auth.minKeptBps)} of what settles (= ${fmtC(floor)} collateral on the current position)`,
       `debt ${formatAmount(position.debt, market.loanDecimals)} | locked collateral ${fmtC(freed)} | already withdrawable ${fmtC(position.collateralWithdrawable)} (forwarded untouched)`,
       `dutch cap now ${fmtC(cap)} | window ${window}s before maturity`,
+      ...(ratio?.mock ? [mockReferenceLabel(ratio)] : []),
       bound === null || boundBps === null
         ? "settleable bound: unknown (pair ratio unavailable)"
         : `settleable bound ~${bound.toFixed(6)} collateral (keep <= ${pct(boundBps)}) — a share above this arms nothing (no keeper can profit)`,
@@ -2063,6 +2072,10 @@ async function gatherStrategy(ctx: Ctx): Promise<GatheredStrategy> {
   });
 }
 
+function mockReferenceLabel(ref: { source?: string; observedAt?: number; expiresAt?: number }): string {
+  return `Mock reference (${ref.source}; observedAt=${ref.observedAt}; expiresAt=${ref.expiresAt})`;
+}
+
 function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
   const parityLine = ((p: GatheredStrategy["parity"]): string => {
     if (p.status === "ok") return "  parity:     the app's quote agrees (POST /api/strategies/quote)";
@@ -2086,6 +2099,7 @@ function renderStrategyQuote(ctx: Ctx, g: GatheredStrategy): string {
     `${res.strategy.name} (${res.strategy.id}) — ${res.side} on the ${res.line} line: ${res.strategy.oneLiner}`,
     `  market:     ${A}/${N}  K = ${px(res.strikeHuman)} ${N} per ${A}  (${res.realizedBufferPct >= 0 ? "+" : ""}${res.realizedBufferPct.toFixed(1)}% ${res.strategy.otmDirection === "above" ? "above" : "below"} spot)  maturity ${res.row.market.params.maturity} (${term / 86_400n}d)`,
     `  spot:       ${px(g.spot)} ${N} per ${A}  [${g.pair}${g.spotStatus === "stale" ? ", STALE" : ""}]  — estimates below are off this spot; execution is bounded by minOut`,
+    ...(g.spotReference ? [`  reference:  ${mockReferenceLabel(g.spotReference)}`] : []),
     `  price:      ${px(g.priceWad)} (simple APR ${apr.toFixed(2)}%)  from ${g.priceFrom}`,
     `  size:       ${formatAmount(g.size, res.strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals)} ${res.strategy.id === "lendQuote" ? N : A}`,
     `  prepay:     ${formatAmount(quote.prepay, prepayDec)} ${prepaySym}   premium: ${num(quote.premium)}`,

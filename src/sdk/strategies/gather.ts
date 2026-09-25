@@ -11,6 +11,7 @@ import { resolveToken } from "../profile.ts";
 import { adapterFor } from "../lineage.ts";
 import { fetchRelayerBook, requireRelayerV2, type RelayerDomain } from "../relayer.ts";
 import { fetchPairRatio, pairFor } from "../spot.ts";
+import { mockReferenceDirection, type MockReferenceMetadata, type ReferenceTokens } from '../mockReference.ts';
 import { priceFromSimpleAprBps } from "../tick.ts";
 import type { Address, DeploymentProfile, MarketParams } from "../types.ts";
 import { getStrategy } from "./catalog.ts";
@@ -77,7 +78,7 @@ export async function poolRowsFor(
   return rows;
 }
 
-export interface SpotRef {
+export interface SpotRef extends Partial<MockReferenceMetadata> {
   /** Numeraire per whole asset, WAD — advisory; every derived figure is an estimate. */
   px: PxWad;
   status: "ready" | "stale";
@@ -91,15 +92,22 @@ export interface SpotRef {
  * "numeraire per asset" on the credit line and its reciprocal on options/exchange.
  */
 export async function spotPxFor(
-  relayerUrl: string | undefined,
+  profileOrUrl: DeploymentProfile | string | undefined,
   line: Line,
   loanSymbol: string | undefined,
   collateralSymbol: string | undefined,
+  tokens?: ReferenceTokens,
 ): Promise<SpotRef> {
   const pair = pairFor(collateralSymbol, loanSymbol);
   if (!pair) throw new Error("cannot name the spot pair — both legs must be profile token symbols");
-  const ratio = await fetchPairRatio(relayerUrl, pair, { stat: "sigma21d" });
+  const ratio = await fetchPairRatio(profileOrUrl, pair, { stat: "sigma21d", ...tokens });
   if (!ratio) throw new Error(`spot unavailable for ${pair} (profile.relayerUrl /spot) — the engine cannot place a strike buffer without it`);
+  if (ratio.mock && ratio.mnvdaBusdWad !== undefined && typeof profileOrUrl === 'object' && tokens) {
+    const direct = mockReferenceDirection(profileOrUrl, tokens) === 'direct';
+    const px = (line === 'credit') === direct ? ratio.mnvdaBusdWad : 10n ** 36n / ratio.mnvdaBusdWad;
+    if (px <= 0n) throw new Error('Mock spot is below WAD precision');
+    return { px, status: ratio.status, pair, mock: true, source: ratio.source, observedAt: ratio.observedAt, expiresAt: ratio.expiresAt };
+  }
   const x = line === "credit" ? ratio.loanPerCollateral : 1 / ratio.loanPerCollateral;
   return { px: parseAmount(x.toFixed(18), 18), status: ratio.status, pair, ...(ratio.sigma21d !== undefined ? { sigmaAnnual: ratio.sigma21d } : {}) };
 }
@@ -163,6 +171,7 @@ export interface GatheredStrategy {
   quote: StrategyQuote;
   spot: PxWad;
   spotStatus: "ready" | "stale";
+  spotReference?: MockReferenceMetadata;
   pair: string;
   priceWad: bigint;
   priceFrom: string;
@@ -189,7 +198,7 @@ export async function gatherStrategyInputs(
   // One spot fetch: any row on this line that carries the asset names the pair.
   const probe = rows.find((r) => classifyLine(r.loanSymbol, r.collateralSymbol) === strategy.line && orientation(strategy.line, r).asset.toLowerCase() === asset.address.toLowerCase());
   if (!probe) throw new Error(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address}`);
-  const spot = req.spot ?? (await spotPxFor(profile.relayerUrl, strategy.line, probe.loanSymbol, probe.collateralSymbol));
+  const spot = req.spot ?? (await spotPxFor(profile, strategy.line, probe.loanSymbol, probe.collateralSymbol, probe.market.params));
 
   const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity: req.maturity, bufferPct: req.bufferPct }, rows, spot.px);
   const sizeDecimals = strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals;
@@ -227,6 +236,7 @@ export async function gatherStrategyInputs(
   const marketId = adapterFor(profile.abiProfile).computeMarketId({ chainId: profile.chainId, core: profile.core }, res.row.market.params);
   const quote = quoteStrategy({ resolution: res, priceWad, spot: spot.px, sigmaAnnual, now, marketId }, size);
   const gathered = { res, quote, spot: spot.px, spotStatus: spot.status, pair: spot.pair, priceWad, priceFrom, size, now, sigmaSource } as GatheredStrategy;
+  if (spot.mock) gathered.spotReference = { mock: true, source: spot.source!, observedAt: spot.observedAt!, expiresAt: spot.expiresAt! };
 
   // Parity: only on the live-book basis (an explicit price or APR has no app-side counterpart), only when a
   // loader exists. Never fatal — a missing app is "unavailable"; a disagreeing one is a loud "mismatch".
@@ -268,6 +278,7 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
     numeraireDecimals: res.numeraireDecimals,
     spot: g.spot,
     spotStatus: g.spotStatus,
+    ...(g.spotReference ? { spotReference: g.spotReference } : {}),
     pair: g.pair,
     priceWad: g.priceWad,
     priceFrom: g.priceFrom,

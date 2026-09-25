@@ -73,8 +73,11 @@ export class StrategyFlowService {
   if(!rows.length)throw new ActionError('MARKET_NOT_FOUND','No live canonical market for the requested asset and maturity');
   // A spot reference is pair-specific. Do not apply a quote for one numeraire to another.
   const pairs=new Set(rows.map(r=>`${r.loanSymbol}:${r.collateralSymbol}`));if(pairs.size!==1)throw new ActionError('MARKET_SELECTION_REQUIRED','Multiple quote-token pairs require an explicit supported market family');
-  const probe=rows[0],spot=await (this.options.spot??spotPxFor)(profile.relayerUrl,strategy.line,probe.loanSymbol,probe.collateralSymbol,ctx);
+  const probe=rows[0],spot=await (this.options.spot
+   ?this.options.spot(profile.relayerUrl,strategy.line,probe.loanSymbol,probe.collateralSymbol,ctx)
+   :spotPxFor(profile,strategy.line,probe.loanSymbol,probe.collateralSymbol,probe.market.params));
   signal?.throwIfAborted();if(spot.status!=='ready'||spot.px<=0n)throw new ActionError('STALE_SPOT','Fresh positive spot is required');
+  if(spot.expiresAt!==undefined&&(!Number.isSafeInteger(spot.expiresAt)||spot.expiresAt*1000<=context.now()))throw new ActionError('STALE_SPOT','Spot source expired; repeat strategy_preview');
   const sizeDecimals=input.strategy==='leveredLong'?probe.collateralDecimals:probe.loanDecimals;
   const size=decimal(input.size,sizeDecimals,'size',true);
   const resolution=resolveStrategy({strategyId:input.strategy,asset:token[1].address,size,maturity:BigInt(input.maturity),bufferPct:input.bufferPct},rows,spot.px);
@@ -139,9 +142,11 @@ export class StrategyFlowService {
    if(!swap)throw new ActionError('SWAP_UNAVAILABLE','No validated depth-aware pool within maxPriceImpactBps');
    topUp=collateral>swap.minOut?collateral-swap.minOut:0n;if(topUp>maxInput)throw new ActionError('MAX_INPUT_EXCEEDED','Required collateral top-up exceeds maxInput');
   }
-  const intent:ActionIntent={action:router?'strategy_program':'buy_dcn',marketId:market.id,account:getAddress(input.account),receiver:getAddress(input.account),policyId:input.policyId,collateralKind:input.collateralKind,evidence:input.evidence,ttlSeconds:input.ttlSeconds,deadline:String(ctx.timestamp+BigInt(input.ttlSeconds??60)),fills:[{offer:selected.offer,commitment:selected.commitment,ratifierData:selected.signature,units:String(units)}],...(router?{router,strategyId:input.strategy}:{}),...(lending?{maxCost:String(maxInput)}:{minProceeds:String(principal),maxTopUp:String(topUp),poolKey:swap!.poolKey,minOut:String(swap!.minOut)})};
+  const requestedDeadline=ctx.timestamp+BigInt(input.ttlSeconds??60);
+  const deadline=spot.expiresAt!==undefined&&BigInt(spot.expiresAt)<requestedDeadline?BigInt(spot.expiresAt):requestedDeadline;
+  const intent:ActionIntent={action:router?'strategy_program':'buy_dcn',marketId:market.id,account:getAddress(input.account),receiver:getAddress(input.account),policyId:input.policyId,collateralKind:input.collateralKind,evidence:input.evidence,ttlSeconds:input.ttlSeconds,deadline:String(deadline),fills:[{offer:selected.offer,commitment:selected.commitment,ratifierData:selected.signature,units:String(units)}],...(router?{router,strategyId:input.strategy}:{}),...(lending?{maxCost:String(maxInput)}:{minProceeds:String(principal),maxTopUp:String(topUp),poolKey:swap!.poolKey,minOut:String(swap!.minOut)})};
   const source={requested,market,selectedOrder:{commitment:selected.commitment,ratifier:selected.offer.ratifier,maker:selected.offer.maker,units:String(units)},spot,realizedBufferPct:resolution.realizedBufferPct,route:{router:router??null,lenderMustRoute,feeBps:String(feeBps)},economics:{face:amount(units,resolution.row.loanDecimals,p.loanToken),cost:amount(cost,resolution.row.loanDecimals,p.loanToken),fee:amount(fee,resolution.row.loanDecimals,p.loanToken),...(lending?{loanPaid:amount(paid,resolution.row.loanDecimals,p.loanToken)}:{principal:amount(principal,resolution.row.loanDecimals,p.loanToken),collateral:amount(collateral,resolution.row.collateralDecimals,p.collateralToken),topUp:amount(topUp,resolution.row.collateralDecimals,p.collateralToken)}),maxInput:amount(maxInput,lending?resolution.row.loanDecimals:resolution.row.collateralDecimals,lending?p.loanToken:p.collateralToken)},swap:swap?{...swap,minOut:amount(swap.minOut,resolution.row.collateralDecimals,p.collateralToken),estimate:amount(swap.estimate,resolution.row.collateralDecimals,p.collateralToken)}:null,indicativePayoff:{feeAdjusted:false,executionGuarantee:false,description:'Indicative spot-based payoff; excludes router fees and actual swap execution effects.',quote:quoteStrategy({resolution,priceWad:selected.price,spot:spot.px,now:ctx.timestamp,sigmaAnnual:spot.sigmaAnnual,marketId:market.id},size)}};
-  return this.actions.preview(intent,signal,{ctx,source});
+  return this.actions.preview(intent,signal,{ctx,source,sourceExpiresAt:spot.expiresAt});
  }
  private async book(params:MarketParams,ctx:ReadContext):Promise<BookEntry[]> {
   const context=this.actions.context,profile=context.profile;let entries:BookEntry[];

@@ -15,6 +15,7 @@ export * from "./vaultApp.ts";
 export * from "./wallet.ts";
 export * from "./discovery.ts";
 export * from "./spot.ts";
+export * from "./mockReference.ts";
 export * from "./strategies/index.ts";
 export * from "./actions/types.ts";
 export * from "./actions/context.ts";
