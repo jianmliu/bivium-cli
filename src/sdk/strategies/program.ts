@@ -281,6 +281,8 @@ export interface OpenProgramOptions {
   /// The router's lender-side fee on a resting ask. Defaults to zero for offline compatibility; live callers
   /// must read LENDER_FEE_BPS and must not treat a failed read as a zero-fee deployment.
   lenderFeeBps?: bigint;
+  /// Internal live-call override from the pinned router quote; offline callers retain legacy BPS defaults.
+  exactFee?: bigint;
   /// Override the derived top-up ceiling (native units of the collateral token).
   maxTopUp?: bigint;
   /// Override the derived principal floor (native units of the loan token).
@@ -335,8 +337,9 @@ export function buildOpenProgram(res: ProgramView, opts: OpenProgramOptions): Pr
     const cost = fillCost(opts.offer, units);
     const premium = units > cost ? units - cost : 0n;
     const lenderFeeBps = opts.lenderFeeBps ?? 0n;
-    // OriginationFee.quoteLenderFee floors but does NOT clamp to cost: this fee is paid on top, not skimmed.
-    const fee = lenderFeeBps > 0n ? premium * lenderFeeBps / 10_000n : 0n;
+    // Legacy offline arithmetic is unclamped; live callers supply the deployment's exact quote (which may cap it).
+    const fee = opts.exactFee ?? (lenderFeeBps > 0n ? premium * lenderFeeBps / 10_000n : 0n);
+    if (typeof fee !== 'bigint' || fee < 0n || cost + fee >= 1n << 256n) throw new Error('Exact lender fee and total must be uint256');
     const costWithFee = cost + fee;
     return {
       legs: [fillAskLeg({ domain: opts.domain, ask: opts.offer, ratifierData: opts.ratifierData, units, maxCost: costWithFee })],
@@ -346,7 +349,8 @@ export function buildOpenProgram(res: ProgramView, opts: OpenProgramOptions): Pr
 
   if (!opts.offer.buy) throw new Error(`${id} takes a lender's bid, not an ask`);
   const cost = fillCost(opts.offer, units);
-  const fee = originationFee(units, cost, feeBps);
+  const fee = opts.exactFee ?? originationFee(units, cost, feeBps);
+  if (typeof fee !== 'bigint' || fee < 0n || fee > cost || fee >= 1n << 256n) throw new Error('Exact borrower fee must be uint256 and no greater than cost');
   const principal = cost - fee;
   const collateral = collateralForDebt(units, res.strike);
   const carriesSwap = res.strategy.requires.includes("swap");

@@ -3,9 +3,10 @@ import { assertNewBusinessMarket } from '../productMarketPolicy.ts';
 import { erc20Abi } from '../abi.ts';
 import { entryFromSignedOffer, fillCost } from '../orderbook.ts';
 import { validateTradePlan } from '../trade.ts';
-import { buildOpenProgram, fillAskLeg, fillBidLeg, originationFee, type Leg } from '../strategies/program.ts';
+import { buildOpenProgram, fillAskLeg, fillBidLeg, type Leg } from '../strategies/program.ts';
 import { getStrategy } from '../strategies/catalog.ts';
-import { gateAbi, routerAbi, grantAbi, CAP_FILL } from '../strategyRouter.ts';
+import { routerAbi, grantAbi, CAP_FILL } from '../strategyRouter.ts';
+import { resolveRouteAdmission, quoteRouteFill, assertRouteSwapCapability } from './routeAdmission.ts';
 import { collateralForDebt } from '../math.ts';
 import { ZERO_ADDRESS, type Address, type Position } from '../types.ts';
 import type { ActionContext, ReadContext, ContractRead } from './context.ts';
@@ -35,23 +36,9 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
  const bound=raw(buying?intent.maxCost:intent.minProceeds,buying?'maxCost':'minProceeds');
  const keyState:Record<string,unknown>={params:p,deadline,matured:ctx.timestamp>=p.maturity};
  const read=async<T>(address:Address,abi:readonly unknown[],name:string,args:readonly unknown[]=[]):Promise<T>=>{const v=await context.read<T>(ctx,address,abi,name,args);keyState[`${address}:${name}:${args.map(String).join(':')}`]=v;return v;};
- let router=intent.router??(borrowing||strategy?context.profile.strategyRouter:undefined);
- if(p.gate.toLowerCase()===ZERO_ADDRESS&&router&&router.toLowerCase()!==context.profile.strategyRouter?.toLowerCase())throw new ActionError('UNSUPPORTED_ACTION','Ungated router must match the trusted host-configured strategyRouter');
- if(p.gate.toLowerCase()!==ZERO_ADDRESS){
-  const routers=await read<Address[]>(p.gate,gateAbi,'routers');
-  const lenderMustRoute=await read<boolean>(p.gate,gateAbi,'LENDER_MUST_ROUTE');
-  if(typeof lenderMustRoute!=='boolean'||!Array.isArray(routers))throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid gate routing response',true);
-  if(borrowing||(buying&&lenderMustRoute)){router??=context.profile.strategyRouter??routers[0];if(!router)throw new ActionError('UNSUPPORTED_ACTION','Gate requires a compatible approved router');}
-  if(router&&!routers.some(r=>r.toLowerCase()===router!.toLowerCase()))throw new ActionError('UNSUPPORTED_ACTION','Router is not approved by market gate');
- }
- if((borrowing||strategy)&&!router)throw new ActionError('UNSUPPORTED_ACTION','Atomic strategy requires a compatible router');
- if(router&&!buying&&!borrowing)throw new ActionError('UNSUPPORTED_ACTION','Router secondary sell cannot guarantee no origination');
- let feeBps=0n,lenderFeeBps=0n,maxLegs=0n;
- if(router){
-  const core=await read<Address>(router,routerAbi,'BIVIUM');if(!isAddress(core)||core.toLowerCase()!==ctx.core.toLowerCase())throw new ActionError('DOMAIN_MISMATCH','Router BIVIUM differs from configured Core');
-  maxLegs=await read<bigint>(router,routerAbi,'MAX_LEGS');
-  if(buying)lenderFeeBps=await read<bigint>(router,routerAbi,'LENDER_FEE_BPS');else feeBps=await read<bigint>(router,routerAbi,'FEE_BPS');
- }
+ const route=intent.action==='sell_dcn'?undefined:await resolveRouteAdmission(context,ctx,p,{side:buying?'buy':'borrow',router:intent.router,requireRouter:!!strategy});
+ const router=route?.router,maxLegs=route?.maxLegs??0n;
+ if(route)keyState.route=route;
  const takes=intent.fills.map(f=>({entry:entryFromSignedOffer(f.offer,f.commitment,f.ratifierData),units:raw(f.units,'fill units',true)}));
  const totalUnits=takes.reduce((n,t)=>n+t.units,0n),totalCost=takes.reduce((n,t)=>n+fillCost(t.entry.offer,t.units,t.entry.price),0n);
  let validated;
@@ -59,10 +46,11 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
  if(validated.marketId.toLowerCase()!==market.id.toLowerCase())throw new ActionError('DOMAIN_MISMATCH','Fill market differs from requested market');
  keyState.preflight=validated.keyState;
  let fees=0n,collateral=0n;const legs:Leg[]=[];
- for(const t of takes){const cost=fillCost(t.entry.offer,t.units,t.entry.price),fee=buying?(t.units>cost?(t.units-cost)*lenderFeeBps/10000n:0n):originationFee(t.units,cost,feeBps);fees+=fee;collateral+=collateralForDebt(t.units,p.strike);
+ for(const t of takes){const cost=fillCost(t.entry.offer,t.units,t.entry.price),fee=route?(await quoteRouteFill(context,ctx,route,buying?'buy':'borrow',t.units,cost)).fee:0n;fees+=fee;collateral+=collateralForDebt(t.units,p.strike);
   if(router&&!strategy)legs.push(buying?fillAskLeg({domain:context.profile,ask:t.entry.offer,ratifierData:t.entry.signature,units:t.units,maxCost:cost+fee}):fillBidLeg({domain:context.profile,offer:t.entry.offer,ratifierData:t.entry.signature,units:t.units,maxTopUp:collateralForDebt(t.units,p.strike),minPrincipal:cost-fee,inner:[]}));
  }
  const paid=totalCost+fees,proceeds=totalCost-fees;
+ if([totalUnits,totalCost,fees,collateral,...(buying?[paid]:[proceeds])].some(n=>n<0n||n>=(1n<<256n)))throw new ActionError('INVALID_ARGUMENT','Aggregate fill amounts exceed uint256');
  if(buying&&paid>bound)throw new ActionError('INVALID_ARGUMENT','maxCost below total cost including fees');
  if(!buying&&proceeds<bound)throw new ActionError('INVALID_ARGUMENT','minProceeds exceeds proceeds after fees');
  let topUp=collateral;
@@ -71,9 +59,10 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
   if(takes.length!==1)throw new ActionError('UNSUPPORTED_ACTION','Strategy program requires exactly one fill');
   const minOut=strategy.requires.includes('swap')?raw(intent.minOut,'minOut',true):undefined;
   if(strategy.requires.includes('swap')){const key=intent.poolKey;if(!key||![key.currency0.toLowerCase(),key.currency1.toLowerCase()].includes(p.loanToken.toLowerCase())||![key.currency0.toLowerCase(),key.currency1.toLowerCase()].includes(p.collateralToken.toLowerCase())||BigInt(key.currency0)>=BigInt(key.currency1))throw new ActionError('INVALID_ARGUMENT','Pool key must match sorted market token pair');}
+  if(strategy.requires.includes('swap'))await assertRouteSwapCapability(context,ctx,route!);
   topUp=buying?0n:raw(intent.maxTopUp,'maxTopUp');
   const creditLine=strategy.line==='credit';
-  const program=buildOpenProgram({strategy,strike:p.strike,asset:creditLine?p.collateralToken:p.loanToken,numeraire:creditLine?p.loanToken:p.collateralToken,line:strategy.line},{domain:context.profile,offer:takes[0].entry.offer,ratifierData:takes[0].entry.signature,units:totalUnits,poolKey:intent.poolKey,minOut,maxTopUp:topUp,minPrincipal:bound,feeBps,lenderFeeBps});legs.push(...program.legs);keyState.program=program.derived;
+  const program=buildOpenProgram({strategy,strike:p.strike,asset:creditLine?p.collateralToken:p.loanToken,numeraire:creditLine?p.loanToken:p.collateralToken,line:strategy.line},{domain:context.profile,offer:takes[0].entry.offer,ratifierData:takes[0].entry.signature,units:totalUnits,poolKey:intent.poolKey,minOut,maxTopUp:topUp,minPrincipal:bound,exactFee:fees});legs.push(...program.legs);keyState.program=program.derived;
  }
  if(router&&BigInt(legs.length+(strategy?.requires.includes('swap')?1:0))>maxLegs)throw new ActionError('INVALID_ARGUMENT','Program exceeds MAX_LEGS');
  const before:Record<string,unknown>={credit:validated.credit},after:Record<string,unknown>=buying?{credit:validated.credit+totalUnits,loanPaid:paid}:borrowing?{newDebt:totalUnits,principalAfterFee:proceeds,collateralTopUpCeiling:topUp}:{credit:validated.credit-totalUnits,loanReceived:proceeds};

@@ -8,9 +8,9 @@ import { resolveStrategy } from '../strategies/resolve.ts';
 import { quoteStrategy } from '../strategies/quote.ts';
 import type { MarketRiskInput, PoolRow } from '../strategies/types.ts';
 import { collateralForDebt, debtForCollateral } from '../math.ts';
-import { originationFee, type PoolKey } from '../strategies/program.ts';
+import { type PoolKey } from '../strategies/program.ts';
 import { swapFloor, readSqrtPriceX96, outAtPoolPrice, type SwapFloor } from '../strategies/pools.ts';
-import { gateAbi, routerAbi } from '../strategyRouter.ts';
+import { resolveRouteAdmission, quoteRouteFill, assertRouteSwapCapability } from './routeAdmission.ts';
 import { entryFromSignedOffer, fillCost, offerActiveAt, sortSide, validateGroups, planSweepByFace, makerBackingKey, type BookEntry, type MakerBacking } from '../orderbook.ts';
 import { fetchRelayerBook } from '../relayer.ts';
 import { MAX_TICK, TICK_SPACING } from '../tick.ts';
@@ -87,15 +87,8 @@ export class StrategyFlowService {
   const market=resolution.row.market,p=market.params,lending=strategy.side==='lend';
   const units=uint(input.strategy==='leveredLong'?debtForCollateral(size,p.strike):size,'face',true);
   const maxInput=decimal(input.maxInput,lending?resolution.row.loanDecimals:resolution.row.collateralDecimals,'maxInput');
-  let router:Address|undefined,lenderMustRoute=false;
-  if(!same(p.gate,ZERO_ADDRESS)){
-   const [routers,must]=await Promise.all([context.read<Address[]>(ctx,p.gate,gateAbi,'routers'),context.read<boolean>(ctx,p.gate,gateAbi,'LENDER_MUST_ROUTE')]);
-   if(!Array.isArray(routers)||routers.length>100||routers.some(r=>!isAddress(r)||same(r,ZERO_ADDRESS))||typeof must!=='boolean')throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid gate routing');
-   lenderMustRoute=must;if(!lending||must)router=routers.find(r=>same(r,profile.strategyRouter??ZERO_ADDRESS))??routers[0];
-  }else if(!lending)router=profile.strategyRouter;
-  if((!lending||lenderMustRoute)&&!router)throw new ActionError('UNSUPPORTED_ACTION','No approved strategy router');
-  let feeBps=0n;
-  if(router){const core=await context.read<Address>(ctx,router,routerAbi,'BIVIUM');if(!isAddress(core)||!same(core,profile.core))throw new ActionError('DOMAIN_MISMATCH','Router points to another Core');feeBps=await context.read<bigint>(ctx,router,routerAbi,lending?'LENDER_FEE_BPS':'FEE_BPS');if(typeof feeBps!=='bigint'||feeBps<0n||feeBps>10000n)throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid router fee');}
+  const route=await resolveRouteAdmission(context,ctx,p,{side:lending?'buy':'borrow'});
+  const {router,lenderMustRoute}=route,feeBps=lending?route.lenderFeeBps:route.feeBps;
   const entries=await this.book(p,ctx);
   const backing=new Map<string,MakerBacking>();
   for(const e of entries){e.consumed=await context.core<bigint>(ctx,'consumed',[e.offer.maker,e.offer.group]);}
@@ -120,11 +113,12 @@ export class StrategyFlowService {
    selected=e;cost=uint(fillCost(e.offer,units,e.price),'cost',true);break;
   }
   if(!selected)throw new ActionError('INSUFFICIENT_LIQUIDITY','No single live order can fill the complete requested size; reduce size or use the separate order workflow');
-  const fee=uint(lending?(units>cost?(units-cost)*feeBps/10000n:0n):originationFee(units,cost,feeBps),'fee');
+  const {fee}=await quoteRouteFill(context,ctx,route,lending?'buy':'borrow',units,cost);
   const principal=lending?0n:uint(cost-fee,'principal',true),paid=uint(cost+fee,'loanPaid'),collateral=uint(collateralForDebt(units,p.strike),'collateral');
   if(lending&&paid>maxInput)throw new ActionError('MAX_INPUT_EXCEEDED','Loan cost including fees exceeds maxInput');
   let swap: (SwapFloor & {poolKey:PoolKey;amountIn:ReturnType<typeof amount>})|undefined,topUp=0n;
   if(!lending){
+   await assertRouteSwapCapability(context,ctx,route,{useQuoter:!!profile.v4Quoter});
    if(!ctx.rpc.call||!profile.v4StateView)throw new ActionError('SWAP_UNAVAILABLE','Pinned StateView price and depth/quoter are required');
    const call=async(to:Address,data:`0x${string}`)=>(await context.limited(()=>ctx.rpc.call!({to,data,blockNumber:ctx.blockNumber}),signal)).data??'0x';
    const pools=this.options.pools??[{fee:3000,tickSpacing:60,hooks:ZERO_ADDRESS}];if(!pools.length||pools.length>8)throw new ActionError('SWAP_UNAVAILABLE','Host pool candidate count must be 1–8');

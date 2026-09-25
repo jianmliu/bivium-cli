@@ -6,6 +6,18 @@ import { StrategyFlowService } from '../src/sdk/actions/strategyFlow.ts';
 import { adapterFor } from '../src/sdk/lineage.ts';
 import { routerAbi } from '../src/sdk/strategyRouter.ts';
 const adapter=adapterFor('core-v2'),max=(1n<<256n)-1n;
+test('actual quoted fee drives strategy economics, encoded program and prepare invalidation',async()=>{
+ const f=strategyFixture('short');const read=f.context.rpc.readContract;
+ let extra=0n;f.context.rpc.readContract=async r=>r.functionName==='quoteFee'?[7n+extra,(r.args![1] as bigint)-7n-extra]:read(r);
+ const p=await f.flow.preview(f.input);const source=p.data.source as any;
+ assert.equal(source.economics.fee.raw,'7');
+ const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'ready');
+ extra=-1n;await assert.rejects(f.actions.prepare(p.data.previewId!),/STATE_CHANGED|STALE_PREVIEW/);
+});
+test('missing router swap manager blocks only swapping strategy, not lending or plain fills',async()=>{
+ const f=strategyFixture('short',{POOL_MANAGER:'0x0000000000000000000000000000000000000000'});await assert.rejects(f.flow.preview(f.input),/SWAP_UNAVAILABLE/);
+ const lending=strategyFixture('lendAsset',{POOL_MANAGER:'0x0000000000000000000000000000000000000000'});assert.ok((await lending.flow.preview(lending.input)).data.previewId);
+});
 test('source expiry bounds preview and rejects prepare at the exclusive boundary',async(t)=>{
  let now=2000_000;t.mock.method(Date,'now',()=>now);
  const f=strategyFixture();
@@ -62,7 +74,7 @@ test('stale spot and unmatched rung refuse',async()=>{const f=strategyFixture();
 test('spoofed entry metadata cannot lower cost and wallet limit is hard',async()=>{const f=strategyFixture();f.entries[0].price=1n;f.entries[0].size=max;await assert.rejects(f.flow.preview({...f.input,maxInput:'0.000001'}),/MAX_INPUT/);});
 test('approvals are prerequisites and prepare returns no trade',async()=>{const f=strategyFixture('short',{allowance:0n,grantOf:[0n,0n]});const p=await f.flow.preview(f.input);const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'prerequisites');assert.ok(f.calls.filter(c=>c.simulation).every(c=>c.functionName!=='execute'));});
 test('gated lender selects gate-approved router and reads only actual lender fee',async()=>{
- const f=strategyFixture('lendAsset',{FEE_BPS:new Error('must not read borrower fee')});
+ const f=strategyFixture('lendAsset',{FEE_BPS:new Error('unused borrower fee')});
  const gate='0x0000000000000000000000000000000000000007' as const;f.market.params.gate=gate;f.offer.gate=gate;f.market.id=adapter.computeMarketId(f.profile,f.market.params);f.entries[0].commitment=adapter.offerCommitment(f.profile,f.offer);
  const p=await f.flow.preview(f.input);const src=(p.data as any).source;assert.equal(src.route.router,f.profile.strategyRouter);assert.ok(BigInt(src.economics.fee.raw)>0n);
  const r=await f.actions.prepare(p.data.previewId!);assert.equal(r.data.kind,'ready');if(r.data.kind==='ready')assert.equal(r.data.transaction.to,f.profile.strategyRouter);
