@@ -23,6 +23,21 @@ Mock expiry is exclusive. The inspected Router accepts `timestamp <= deadline`,
 so the source-derived transaction deadline is capped at `expiresAt - 1`, not
 `expiresAt`. Successful preparation does not extend source lifetime.
 
+## Market discovery smoke
+
+At `2026-09-25T16:12:48Z`, local MCP source at `286fdee` read the public testnet
+index (no writes). Default `market_list` returned 2 new-business markets;
+`includeHistory:true` returned 42 records, including 21 `delisted` records.
+Both queries identified the same active pair orientations, mNVDA/bUSD and
+bUSD/mNVDA, with maturity `1792180800`:
+
+- `0x0dbceea8b46139c606e9614a9200042a2dea317d11acf03db27bd118afeff5fb`
+- `0xe9b2fba7a20b3638219bcc6f9387e7cce778c0825a7cb0e255510848eec54107`
+
+This is a local-source smoke against public services, not verification of a newly
+deployed remote MCP version. Parent policy/boundary/CLI test run: 25/25 passed;
+independent Task 2 specification review: 57/57 passed and accepted `286fdee`.
+
 ## Fee semantics evidence
 
 Public, read-only Robinhood testnet RPC at block `124180013`, timestamp
@@ -44,6 +59,14 @@ source/provenance/expiry rules, or inverse-price handling. It correctly refused
 to infer pre-maturity no-new-debt selling from frontend enablement. It found the
 premium fee basis but not the deployed cap or exact rounding. The reference
 update must close these demonstrated gaps, not imply new execution authority.
+
+Independent forward testing of the updated references correctly selected the
+history flag, Mock provenance/expiry, per-fill fee quote and fail-closed routing,
+and refused a premature no-new-debt sale despite a request to skip errors. It
+identified older README wording that overclaimed direct sweeps and maker ASK
+semantics, plus an unclear counter-token interface. Those passages were revised;
+the reviewer confirmed all three findings resolved. This verifies reference
+behavior only, not deployed software. Skill-copy synchronization: 7/7 tests passed.
 
 ## Deferred integration acceptance
 

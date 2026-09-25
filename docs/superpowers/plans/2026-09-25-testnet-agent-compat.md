@@ -40,8 +40,8 @@ if (reverse === 0n) throw new Error('Mock reciprocal underflows');
 
 Files: create `src/sdk/productMarketPolicy.ts`, `test/product-market-policy.test.ts`; modify `src/mcp/server.ts`, `src/sdk/strategies/gather.ts`, `src/sdk/actions/strategyFlow.ts`, `src/sdk/actions/orders.ts`, `src/sdk/actions/prepare.ts`, `src/sdk/actions/tradePrepare.ts`, `src/sdk/actions/reads.ts`, `src/cli/main.ts` and relevant tests.
 
-- [ ] Add failing tests with FUTURE-dated CASHCAT markets in either orientation, case-insensitive addresses, another Core/chain controls, expired mNVDA, and preserved historical account/recovery access.
-- [ ] Shared result shape and decision:
+- [x] Add failing tests with FUTURE-dated CASHCAT markets in either orientation, case-insensitive addresses, another Core/chain controls, expired mNVDA, and preserved historical account/recovery access.
+- [x] Shared result shape and decision:
 
 ```ts
 type ProductMarketStatus = {
@@ -55,10 +55,10 @@ type ProductMarketStatus = {
 // newBusiness = !delisted && !matured.
 ```
 
-- [ ] CLI `market list` adds `--include-history`; MCP `market_list` adds boolean `includeHistory` default false. Filter BEFORE pagination and bind cursor to flag/filter. Both historical output and market_details carry status; no deletion from underlying discovery or profile.
-- [ ] Enforce same policy for high-level quote/preview, new offers, borrow/buy/fund/escrow and prepare revalidation. Keep sell exit, repay/claim/withdraw/cancel/read paths separate; a future CASHCAT market must not slip through because only maturity is checked. Preserve pre-existing DCN execution safety restrictions.
-- [ ] Legacy CLI maker/trade/borrow/strategy entry points check policy before signing/write preparation, while raw protocol primitives remain permissionless. Never filter the portfolio source.
-- [ ] Run new tests plus CLI/MCP listing, action, order, strategy and recovery suites; typecheck, commit, spec review then quality review.
+- [x] CLI `market list` adds `--include-history`; MCP `market_list` adds boolean `includeHistory` default false. Filter BEFORE pagination and bind cursor to flag/filter. Both historical output and market_details carry status; no deletion from underlying discovery or profile.
+- [x] Enforce same policy for high-level quote/preview, new offers, borrow/buy/fund/escrow and prepare revalidation. Keep sell exit, repay/claim/withdraw/cancel/read paths separate; a future CASHCAT market must not slip through because only maturity is checked. Preserve pre-existing DCN execution safety restrictions.
+- [x] Legacy CLI maker/trade/borrow/strategy entry points check policy before signing/write preparation, while raw protocol primitives remain permissionless. Never filter the portfolio source.
+- [x] Run new tests plus CLI/MCP listing, action, order, strategy and recovery suites; typecheck, commit, spec review then quality review. Accepted at `286fdee`; partial-fill recovery uses current remaining group capacity, not original caps. Full suite 459/461 with only the two deferred Task 4 source-pin failures; independent spec 57/57 and quality 40/40 focused tests passed.
 
 ## Task 3 — pinned route/fee admission and DCN compatibility
 

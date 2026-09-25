@@ -109,6 +109,24 @@ minimum-output, and deadline bounds and labels the result `intent`, `router`, or
 authorization; execution still uses the existing write commands and a fresh user approval and
 signature per transaction on Robinhood Chain testnet `46630` only.
 
+### Testnet market visibility and reference prices
+
+CLI `market list` and MCP `market_list` default to new-business markets. For the
+complete directory use `market list --include-history --json` or
+`market_list({includeHistory:true})`. Status fields distinguish product delisting
+from maturity. CASHCAT is excluded from new business only on the configured
+Robinhood testnet Core; historical balances, repayment, claims, withdrawals and
+cancellation remain accessible by original market ID. This does not restrict
+permissionless Core or erase historical markets.
+
+The deployment-bound mNVDA/bUSD reference comes from `/mock-refill-spot` and is
+explicitly labelled Mock with source `observedAt` and `expiresAt`. It is not live
+NVDA pricing. The reverse uses the canonical price's integer reciprocal. Source
+age must be below 1,800 seconds; invalid/unavailable data never falls back to the
+old feed. Strategy previews expire with the source, including an onchain deadline
+strictly before its exclusive expiry. See the [MCP reference](skills/bivium/references/mcp.md)
+for exact discovery, recovery and freshness behavior.
+
 ### Fees on current routers
 
 Fee-bearing routers charge only the side crossing the book, based on the fill's premium
@@ -117,6 +135,19 @@ pays on top of core cost using `LENDER_FEE_BPS`. The lender's `maxCost` and toke
 that total. Read rates from the selected deployment; a failed fee read must not silently become
 zero. Older routers without the lender-fee getter require a compatible deployment before this
 lender execution path can be quoted.
+
+Live preparation uses the selected Router's per-fill onchain quote, including
+integer rounding and any principal cap. On the current Robinhood testnet Router,
+both sides are capped at 20% of Core cost; do not impose that assumption on an
+unrelated legacy Router. A Gate mismatch, ambiguous candidates, missing code,
+wrong Core or unavailable fee quote stops preparation, not a free/direct fallback.
+Details report unknown route/fee information as partial coverage with warnings.
+
+Fee-bearing DCN buying and explicit borrowing are distinct actions. Pre-maturity
+secondary-only taker selling remains blocked on the inspected StrategyRouter:
+`maxTopUp=0` only limits wallet funding, while Router-held collateral could still
+create debt if the seller's credit changes. Frontend DCN availability does not
+remove this execution-time requirement. See the [contract boundary evidence](docs/verification/2026-09-25-dcn-secondary-route-boundary.md).
 
 This origination fee is collected at execution, not from later realized profit. Resting makers
 pay no such router fee; repay/close carry no origination fee. Gas, swap costs and keeper fees are
@@ -429,8 +460,10 @@ app guards and verify the expected `Borrowed` event and loan-token delta.
 
 ## DCN secondary trading (order book, sweeps, relayer)
 
-The `book`, `trade`, and `order` groups trade existing DCN credit. A maker sell offer transfers
-credit it already holds; a maker buy offer buys credit using pre-funded liquidity. Books come from
+The `book`, `trade`, and `order` groups expose DCN order-book reads and supported trades. A maker
+sell offer consumes held credit first, but later credit withdrawals or escrow deposits can change
+its origination behavior; it is not an atomic no-new-debt guarantee. A maker buy offer uses
+pre-funded liquidity. Books come from
 strictly validated signed-offer files or the configured relayer. Relayer failure means unknown
 liquidity, never an empty book, and one malformed row invalidates the batch.
 
@@ -446,11 +479,13 @@ npm run cli --silent -- trade buy "${MARKET_ARGS[@]}" --spend '100' \
 npm run cli --silent -- order cancel --offer ask.json --key-file "$HOLDER_KEY_FILE" --json
 ```
 
-Sweeps are one atomic Core multicall. Buy fills ceil cost toward the resting maker; sell fills floor
-proceeds toward the resting maker. `--limit-tick` bounds the worst execution price and
-`--exact-spend` refuses partial budget absorption. Postconditions require exact credit and cash
-deltas. Selling DCN stays legal after maturity because it transfers existing credit rather than
-originating debt.
+The legacy direct sweep uses one atomic Core multicall only where that product path is supported.
+A gated path requiring admitted fee routing must use supported routed preparation or stop before
+signing; these examples do not authorize a direct-Core fallback. Buy fills ceil cost toward the
+resting maker; sell fills floor proceeds toward the resting maker. `--limit-tick` bounds the worst
+execution price and `--exact-spend` refuses partial budget absorption. Post-execution credit/cash
+checks detect discrepancies but cannot reverse a mined transaction. After maturity, Core prohibits
+new debt, so a supported sell requires sufficient existing credit and valid offers.
 
 ## ABI lineages
 
