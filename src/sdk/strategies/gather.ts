@@ -195,12 +195,21 @@ export async function gatherStrategyInputs(
   if (req.maturity <= now) throw new Error("maturity is in the past");
 
   const rows = req.rows ?? (await poolRowsFor(profile, client, await loadDiscoveredMarkets(profile, client, req.market)));
-  // One spot fetch: any row on this line that carries the asset names the pair.
-  const probe = rows.find((r) => classifyLine(r.loanSymbol, r.collateralSymbol) === strategy.line && orientation(strategy.line, r).asset.toLowerCase() === asset.address.toLowerCase());
-  if (!probe) throw new Error(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address}`);
+  // Choose the actual maturity/token family before its reference: a different numeraire's price
+  // must never rank these rungs, even when both numeraires are classified as stable.
+  const candidates = rows.filter((r) => {
+    if (classifyLine(r.loanSymbol, r.collateralSymbol) !== strategy.line || r.market.params.maturity !== req.maturity) return false;
+    const o = orientation(strategy.line, r);
+    return o.asset.toLowerCase() === asset.address.toLowerCase()
+      && (!counter || o.numeraire.toLowerCase() === counter.address.toLowerCase());
+  });
+  const probe = candidates[0];
+  if (!probe) throw new Error(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address} at maturity ${req.maturity}${counter ? ` against ${counter.symbol ?? counter.address}` : ''}`);
+  const pairs = new Set(candidates.map((r) => `${r.market.params.loanToken.toLowerCase()}:${r.market.params.collateralToken.toLowerCase()}`));
+  if (pairs.size !== 1) throw new Error('multiple quote-token pairs match this asset and maturity — specify counter');
   const spot = req.spot ?? (await spotPxFor(profile, strategy.line, probe.loanSymbol, probe.collateralSymbol, probe.market.params));
 
-  const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity: req.maturity, bufferPct: req.bufferPct }, rows, spot.px);
+  const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity: req.maturity, bufferPct: req.bufferPct }, candidates, spot.px);
   const sizeDecimals = strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals;
   const size = parseAmount(req.size, sizeDecimals);
 

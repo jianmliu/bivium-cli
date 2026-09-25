@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchPairRatio } from '../src/sdk/spot.ts';
-import { spotPxFor } from '../src/sdk/strategies/gather.ts';
+import { gatherStrategyInputs, spotPxFor } from '../src/sdk/strategies/gather.ts';
+import type { PoolRow } from '../src/sdk/strategies/types.ts';
 import type { DeploymentProfile } from '../src/sdk/types.ts';
 import { runCli } from '../src/cli/main.ts';
 import { BiviumClient } from '../src/sdk/client.ts';
@@ -16,6 +17,36 @@ const profile:DeploymentProfile={name:'mock',chainId:46630,abiProfile:'core-v2',
 const payload={version:1,pair:'MNVDA-BUSD',mock:true,mnvdaBusdWad:'225000000000000000001',observedAt:10000};
 const direct={loanToken:usd,collateralToken:asset};
 const reverse={loanToken:asset,collateralToken:usd};
+const usdc='0x0000000000000000000000000000000000000011' as const;
+const multiProfile={...profile,tokens:{...profile.tokens,USDC:{address:usdc,decimals:6}}};
+function creditRow(loanToken:typeof usd|typeof usdc,loanSymbol:string,maturity:bigint):PoolRow{
+ const params={loanToken,collateralToken:asset,maturity,strike:strikeFromFloor('180',6,18),allowPartialRepay:true,gate:'0x0000000000000000000000000000000000000000' as const};
+ return {market:{id:adapterFor('core-v2').computeMarketId(profile,params),params,firstSeenBlock:0n},loanSymbol,collateralSymbol:'mNVDA',loanDecimals:6,collateralDecimals:18};
+}
+for(const reverseOrder of [false,true]){
+ for(const maturity of [20000n,30000n])test(`gather binds feed to requested maturity ${maturity} regardless of row order ${reverseOrder}`,async(t)=>{
+  t.mock.method(Date,'now',()=>10001_000);const urls:string[]=[];
+  t.mock.method(globalThis,'fetch',async(url:unknown)=>{urls.push(String(url));return Response.json(String(url).endsWith('/mock-refill-spot')?payload:{loanPerCollateral:300,status:'ready',assumed:[]});});
+  const rows=[creditRow(usd,'bUSD',20000n),creditRow(usdc,'USDC',30000n)];if(reverseOrder)rows.reverse();
+  const result=await gatherStrategyInputs(multiProfile,undefined,{strategy:'lendQuote',asset:'mNVDA',size:'1',maturity,bufferPct:20,priceWad:990000000000000000n,rows,parity:false});
+  const mock=maturity===20000n;
+  assert.equal(result.res.numeraire,mock?usd:usdc);assert.equal(result.spot,mock?BigInt(payload.mnvdaBusdWad):300n*10n**18n);
+  assert.equal(result.spotReference?.mock,mock?true:undefined);
+  assert.deepEqual(urls,[mock?'https://relayer.invalid/api/mock-refill-spot':'https://relayer.invalid/api/spot?pair=MNVDA-USDC&stat=sigma21d']);
+ });
+ test(`gather rejects ambiguous same-maturity numeraires before fetching and respects explicit counter (${reverseOrder})`,async(t)=>{
+  t.mock.method(Date,'now',()=>10001_000);const urls:string[]=[];
+  t.mock.method(globalThis,'fetch',async(url:unknown)=>{urls.push(String(url));return Response.json(String(url).endsWith('/mock-refill-spot')?payload:{loanPerCollateral:300,status:'ready',assumed:[]});});
+  const rows=[creditRow(usd,'bUSD',20000n),creditRow(usdc,'USDC',20000n)];if(reverseOrder)rows.reverse();
+  const req={strategy:'lendQuote',asset:'mNVDA',size:'1',maturity:20000n,bufferPct:20,priceWad:990000000000000000n,rows,parity:false as const};
+  await assert.rejects(gatherStrategyInputs(multiProfile,undefined,req),/multiple.*pairs|ambiguous/i);assert.equal(urls.length,0);
+  for(const counter of ['bUSD','USDC']){
+   const result=await gatherStrategyInputs(multiProfile,undefined,{...req,counter});const mock=counter==='bUSD';
+   assert.equal(result.res.numeraire,mock?usd:usdc);assert.equal(result.spot,mock?BigInt(payload.mnvdaBusdWad):300n*10n**18n);assert.equal(result.spotReference?.mock,mock?true:undefined);
+  }
+  assert.deepEqual(urls,['https://relayer.invalid/api/mock-refill-spot','https://relayer.invalid/api/spot?pair=MNVDA-USDC&stat=sigma21d']);
+ });
+}
 
 test('Mock reference preserves canonical WAD, reciprocal, observation metadata and no sigma in both directions',async(t)=>{
  t.mock.method(Date,'now',()=>10001_000);
