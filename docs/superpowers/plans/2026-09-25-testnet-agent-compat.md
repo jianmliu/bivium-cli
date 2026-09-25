@@ -18,9 +18,9 @@ All steps below are local. Each task follows RED → GREEN → self-review → i
 
 Files: create `src/sdk/mockReference.ts`, `test/mock-reference.test.ts`; modify `src/sdk/spot.ts`, `src/sdk/strategies/gather.ts`, `src/sdk/actions/strategyFlow.ts`, their callers in `src/cli/main.ts`, exports in `src/sdk/index.ts`, and relevant tests.
 
-- [ ] Add failing HTTP-boundary tests for both orientations, observedAt boundaries, wrong chain/Core/assets, malformed payload, stale/network failure without legacy fallback. Use the actual current deployment identity and local HTTP fixture; never real wallet keys.
-- [ ] Run `node --import tsx --test test/mock-reference.test.ts` and retain expected missing-feature failures.
-- [ ] Implement a pure identity predicate over profile chain/Core/token addresses and a bounded fetch/parser. Metadata is `{mock:true,source,observedAt,expiresAt}`; canonical price is bigint WAD. The implementation invariant is:
+- [x] Add failing HTTP-boundary tests for both orientations, observedAt boundaries, wrong chain/Core/assets, malformed payload, stale/network failure without legacy fallback. Use the actual current deployment identity and local HTTP fixture; never real wallet keys.
+- [x] Run `node --import tsx --test test/mock-reference.test.ts` and retain expected missing-feature failures.
+- [x] Implement a pure identity predicate over profile chain/Core/token addresses and a bounded fetch/parser. Metadata is `{mock:true,source,observedAt,expiresAt}`; canonical price is bigint WAD. The implementation invariant is:
 
 ```ts
 const age = nowSeconds - observedAt;
@@ -32,9 +32,9 @@ const reverse = 10n ** 36n / canonical;
 if (reverse === 0n) throw new Error('Mock reciprocal underflows');
 ```
 
-- [ ] Wire actual profile/market identity into shared spot gathering. Preserve legacy behavior for unrelated domains. No symbol-only opt-in; no fabricated volatility; no legacy fallback on configured Mock failure. Carry exact canonical strategy WAD rather than inverting an already rounded reciprocal. Preserve metadata in human/JSON/MCP outputs and bound preview expiry to source expiry.
-- [ ] Run new tests, existing spot/strategy/preview tests and `npm run typecheck`; commit only task files.
-- [ ] Independent spec review then quality review; address findings before Task 2.
+- [x] Wire actual profile/market identity into shared spot gathering. Preserve legacy behavior for unrelated domains. No symbol-only opt-in; no fabricated volatility; no legacy fallback on configured Mock failure. Carry exact canonical strategy WAD rather than inverting an already rounded reciprocal. Preserve metadata in human/JSON/MCP outputs and bound preview expiry to source expiry.
+- [x] Run new tests, existing spot/strategy/preview tests and `npm run typecheck`; commit only task files.
+- [x] Independent spec review then quality review; address findings before Task 2. Accepted at `62d5674`; review fixes bind the eligible token family before price lookup and cap the inclusive Router deadline at exclusive source expiry minus one second.
 
 ## Task 2 — new-business status without breaking recovery
 
