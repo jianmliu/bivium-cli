@@ -76,6 +76,7 @@ Files: create `src/sdk/actions/routeAdmission.ts`, `test/route-admission.test.ts
 Files: update `README.md`, `skills/bivium/references/mcp.md` and `.claude/skills/bivium/references/mcp.md` identically; add `docs/verification/2026-09-25-testnet-agent-compat.md`.
 
 - [ ] Document default market filter/history switch, Mock provenance/freshness, actual fee basis, route failure behavior, DCN capability boundary and external wallet-only signing.
+- [ ] After all CLI source changes are committed, refresh only affected CLI runtime source hashes and `pins.cli.commit` in `releases/keeper-v2/integration-manifest.json`. Preserve Core/MM/fixture pins; rerun portable and pinned cross-repository integration checks. Task 1 exposed two expected source-pin drift failures; these are deferred here, not waived.
 - [ ] Run `npm test`, `npm run typecheck`, `npm run mcp:worker:build`, and `git diff --check`; inspect complete exit status/counts. No npm publication or Cloudflare deploy.
 - [ ] Run read-only SDK/MCP smoke against public testnet services: 2 active mNVDA markets, 42 historical records with delisting state, fresh 225 Mock snapshot (actual current configured value, not hard-coded in product logic), Gate-selected Router/fees. Document observed time/block; no authentication scope expansion or remote writes.
 - [ ] Independent final review and record known limitations. If an external service is unavailable, report it without substituting a fabricated success.
