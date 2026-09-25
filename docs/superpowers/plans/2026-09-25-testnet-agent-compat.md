@@ -64,21 +64,27 @@ type ProductMarketStatus = {
 
 Files: create `src/sdk/actions/routeAdmission.ts`, `test/route-admission.test.ts`; modify `src/sdk/actions/reads.ts`, `src/sdk/actions/tradePrepare.ts`, `src/sdk/actions/strategyFlow.ts`, relevant SDK/CLI routing callers and tests.
 
-- [ ] Add RED cases: old configured Router is not admitted by new Gate; one compatible Router succeeds; ambiguous candidates reject; Gate/Core/code/getter failures reject; fees out of 0–2000 reject; details show partial/unknown when unresolved.
-- [ ] Implement one shared pinned resolver. Read Gate BIVIUM/routers/LENDER_MUST_ROUTE, validate addresses/Core/code. Prefer explicitly configured compatible admitted router; otherwise only one compatible candidate. Check required router BIVIUM, code, fee getters and MAX_LEGS before preparation. Explicit incompatible router is an error, never silently replaced. Unsupported or uncertain capability is not free/direct execution.
-- [ ] Reuse in details and actions; preserve fee-aware budgets and revalidation fingerprints. Borrow/strategy and buy_dcn must no longer select an unapproved profile Router by default. Enforce relevant max-cost/min-proceeds after per-fill fee rounding.
-- [ ] Bind fee arithmetic to the selected Router's actual quote semantics, including the principal cap. Read-only evidence at block 124180013 (timestamp 1790351341): current Router returns `quoteFee(1000,100)=(20,80)`, `quoteLenderFee(1000,100)=(20,120)`, `MAX_FEE_OF_PRINCIPAL_BPS=2000`. Do not apply uncapped legacy arithmetic to this deployment or assume unrelated routers share a cap; cover capped and normal-price fills.
-- [ ] Preserve safe ungated direct behavior where contract permits. Legacy CLI gated sweeps must either use admitted bounded preparation or stop before any signing with an actionable unsupported explanation; never blindly direct-fill a lender-must-route market.
-- [ ] Inspect pinned StrategyRouter/Core sources for pure-secondary execution guarantee. Record concrete evidence for donated collateral and changing credit. Enable only if actual contract guards exclude debt creation. If no guard exists, keep pre-maturity sell_dcn refusal, add machine-readable capability/reason and regression coverage; do not deploy an adapter in this task.
-- [ ] Test fee-bearing buy_dcn calldata/receiver/approval, explicit borrow distinct from sell, failures and safe recovery; typecheck, commit, spec review then quality review.
+- [x] Add RED cases: old configured Router is not admitted by new Gate; one compatible Router succeeds; ambiguous candidates reject; Gate/Core/code/getter failures reject; fees out of 0–2000 reject; details show partial/unknown when unresolved.
+- [x] Implement one shared pinned resolver. Read Gate BIVIUM/routers/LENDER_MUST_ROUTE, validate addresses/Core/code. Prefer explicitly configured compatible admitted router; otherwise only one compatible candidate. Check required router BIVIUM, code, fee getters and MAX_LEGS before preparation. Explicit incompatible router is an error, never silently replaced. Unsupported or uncertain capability is not free/direct execution.
+- [x] Reuse in details and actions; preserve fee-aware budgets and revalidation fingerprints. Borrow/strategy and buy_dcn must no longer select an unapproved profile Router by default. Enforce relevant max-cost/min-proceeds after per-fill fee rounding.
+- [x] Bind fee arithmetic to the selected Router's actual quote semantics, including the principal cap. Read-only evidence at block 124180013 (timestamp 1790351341): current Router returns `quoteFee(1000,100)=(20,80)`, `quoteLenderFee(1000,100)=(20,120)`, `MAX_FEE_OF_PRINCIPAL_BPS=2000`. Do not apply uncapped legacy arithmetic to this deployment or assume unrelated routers share a cap; cover capped and normal-price fills.
+- [x] Preserve safe ungated direct behavior where contract permits. Legacy CLI gated sweeps must either use admitted bounded preparation or stop before any signing with an actionable unsupported explanation; never blindly direct-fill a lender-must-route market.
+- [x] Inspect pinned StrategyRouter/Core sources for pure-secondary execution guarantee. Record concrete evidence for donated collateral and changing credit. Enable only if actual contract guards exclude debt creation. If no guard exists, keep pre-maturity sell_dcn refusal, add machine-readable capability/reason and regression coverage; do not deploy an adapter in this task.
+- [x] Test fee-bearing buy_dcn calldata/receiver/approval, explicit borrow distinct from sell, failures and safe recovery; typecheck, commit, spec review then quality review.
 
 ## Task 4 — integration, agent docs and local acceptance
 
 Files: update `README.md`, `skills/bivium/references/mcp.md` and `.claude/skills/bivium/references/mcp.md` identically; add `docs/verification/2026-09-25-testnet-agent-compat.md`.
 
-- [ ] Document default market filter/history switch, Mock provenance/freshness, actual fee basis, route failure behavior, DCN capability boundary and external wallet-only signing.
-- [ ] After all CLI source changes are committed, refresh only affected CLI runtime source hashes and `pins.cli.commit` in `releases/keeper-v2/integration-manifest.json`. Preserve Core/MM/fixture pins; rerun portable and pinned cross-repository integration checks. Task 1 exposed two expected source-pin drift failures; these are deferred here, not waived.
-- [ ] Run `npm test`, `npm run typecheck`, `npm run mcp:worker:build`, and `git diff --check`; inspect complete exit status/counts. No npm publication or Cloudflare deploy.
-- [ ] Run read-only SDK/MCP smoke against public testnet services: 2 active mNVDA markets, 42 historical records with delisting state, fresh 225 Mock snapshot (actual current configured value, not hard-coded in product logic), Gate-selected Router/fees. Document observed time/block; no authentication scope expansion or remote writes.
-- [ ] Independent final review and record known limitations. If an external service is unavailable, report it without substituting a fabricated success.
-- [ ] Commit verified local work and report ready-for-PR vs contract-blocked capabilities precisely. Leave worktree and branches intact.
+- [x] Document default market filter/history switch, Mock provenance/freshness, actual fee basis, route failure behavior, DCN capability boundary and external wallet-only signing.
+- [x] After all CLI source changes are committed, refresh only affected CLI runtime source hashes and `pins.cli.commit` in `releases/keeper-v2/integration-manifest.json`. Preserve Core/MM/fixture pins; rerun portable and pinned cross-repository integration checks. Task 1 exposed two expected source-pin drift failures; these are deferred here, not waived.
+- [x] Run `npm test`, `npm run typecheck`, `npm run mcp:worker:build`, and `git diff --check`; inspect complete exit status/counts. No npm publication or Cloudflare deploy.
+- [x] Run read-only SDK/MCP smoke against public testnet services: 2 active mNVDA markets, 42 historical records with delisting state, fresh 225 Mock snapshot (actual current configured value, not hard-coded in product logic), Gate-selected Router/fees. Document observed time/block; no authentication scope expansion or remote writes.
+- [x] Independent final review and record known limitations. If an external service is unavailable, report it without substituting a fabricated success.
+- [x] Commit verified local work and report ready-for-PR vs contract-blocked capabilities precisely. Leave worktree and branches intact.
+
+Final source `ad1f0cf` passed independent Task 3 specification and whole-change
+quality reviews. Parent acceptance: 483/483 tests, typecheck, Worker build and
+non-publishing dry-run, portable and pinned cross-repository integration, and
+public-service read-only smoke all passed. Exact evidence and deployment limits
+are recorded in `docs/verification/2026-09-25-testnet-agent-compat.md`.
