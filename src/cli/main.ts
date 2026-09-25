@@ -2,6 +2,9 @@
 // bivium — CLI over the Bivium SDK (core-v1 lineage). See docs/spec/2026-08-09-bivium-cli-spec.md.
 import { randomBytes } from "node:crypto";
 import { assertNewBusinessMarket, productMarketStatus } from '../sdk/productMarketPolicy.ts';
+import { ActionContext } from '../sdk/actions/context.ts';
+import { tokenDecimals as pinnedTokenDecimals } from '../sdk/actions/reads.ts';
+import { resolveRouteAdmission, quoteRouteFill, assertRouteSwapCapability } from '../sdk/actions/routeAdmission.ts';
 import { readdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -330,13 +333,9 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   const v = ctx.values;
   const openingFile = v.unwind === true ? undefined : parseSignedOfferFile(readFileSync(need(v.offer as string | undefined, "offer"), "utf8"), ctx.profile);
   if (openingFile) assertNewBusinessMarket(ctx.profile, openingFile.offer);
-  const router = getAddress(
-    typeof v.router === "string" ? v.router : (ctx.profile.strategyRouter ?? fail("no --router and the profile has no strategyRouter for this chain")),
-  ) as Address;
-  const client = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, router);
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
-  const deadline = typeof v.deadline === "string" ? BigInt(v.deadline) : nowSec + 600n;
-  const grantExpiry = typeof v.ttl === "string" ? nowSec + BigInt(v.ttl) : 0n;
+  let deadline = typeof v.deadline === "string" ? BigInt(v.deadline) : nowSec + 600n;
+  let grantExpiry = typeof v.ttl === "string" ? nowSec + BigInt(v.ttl) : 0n;
   if (ctx.profile.abiProfile !== "core-v2") fail("the StrategyRouter is core-v2 periphery; this profile is core-v1");
   const domain = { chainId: ctx.profile.chainId, core: ctx.profile.core };
   const slippageBps = Number(v["slippage-bps"] ?? 100);
@@ -345,6 +344,9 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   const poolHooks = getAddress((v["pool-hooks"] as string | undefined) ?? ZERO_ADDRESS) as Address;
 
   if (v.unwind === true) {
+    // Recovery retains its selected router; opening-market admission must not strand an existing position.
+    const router = getAddress(typeof v.router === 'string' ? v.router : (ctx.profile.strategyRouter ?? fail('no --router and no configured strategyRouter'))) as Address;
+    const client = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, router);
     const { params, loanDecimals, collateralDecimals } = await resolveMarket(ctx);
     const assets = parseAmount(need(v.assets as string | undefined, "assets"), loanDecimals);
     const via = v.via === "wallet" ? "wallet" : v.via === "flash" || v.via === undefined ? "flash" : fail("--via is wallet or flash");
@@ -381,29 +383,24 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   const strategy = getStrategy(need(v.strategy as string | undefined, "strategy"));
   const file = openingFile!;
   const params = marketParamsFromOffer(file.offer);
-  // A gated market decides which router it accepts, and this deployment runs more than one gate generation at
-  // once — the fee rule changed by opening a new series, not by changing a setting. So the profile's router is a
-  // default, not an answer: ask the gate before building a program it would refuse.
-  let c = client;
-  if (params.gate.toLowerCase() !== ZERO_ADDRESS.toLowerCase()) {
-    const { routers, lenderMustRoute } = await client.gateRouting(params.gate);
-    if (!file.offer.buy && !lenderMustRoute) {
-      fail(
-        `this market's gate ${params.gate} does not route lenders, so a lend fills the ask directly on the core; `
-          + "building a router program here would charge a fee the gate never asks for",
-      );
-    }
-    const admitted = routers.map((r) => r.toLowerCase());
-    if (!admitted.includes(client.router.toLowerCase())) {
-      if (typeof v.router === "string") {
-        fail(`--router ${client.router} is not admitted by this market's gate ${params.gate}, which lists ${routers.join(", ")}`);
-      }
-      if (routers.length === 0) fail(`this market's gate ${params.gate} admits no routers, so it cannot be originated at all`);
-      c = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, routers[0]);
-    }
+  const context = new ActionContext({ profile: ctx.profile });
+  const pinned = await context.pin();
+  assertNewBusinessMarket(ctx.profile, params, pinned.timestamp);
+  deadline = typeof v.deadline === 'string' ? BigInt(v.deadline) : pinned.timestamp + 600n;
+  grantExpiry = typeof v.ttl === 'string' ? pinned.timestamp + BigInt(v.ttl) : 0n;
+  let route;
+  try {
+    route = await resolveRouteAdmission(context, pinned, params, {
+      side: file.offer.buy ? 'borrow' : 'buy',
+      router: typeof v.router === 'string' ? getAddress(v.router) : undefined,
+      requireRouter: params.gate.toLowerCase() === ZERO_ADDRESS,
+    });
+  } catch (error) {
+    fail(`Cannot admit a compatible router/gate; verify the RPC and re-quote, refusing to assume direct lender fill: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const loanDecimals = await tokenDecimals(ctx, params.loanToken);
-  const collateralDecimals = await tokenDecimals(ctx, params.collateralToken);
+  if (!route.router) fail("This gate does not route lenders: a lend fills the ask directly on the core; use unsigned action_preview buy_dcn instead of a fee-charging router program");
+  const loanDecimals = await pinnedTokenDecimals(context, pinned, params.loanToken);
+  const collateralDecimals = await pinnedTokenDecimals(context, pinned, params.collateralToken);
   const units = parseAmount(need(v.units as string | undefined, "units"), loanDecimals);
   const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), sym]));
   const row = {
@@ -424,19 +421,18 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
 
   const carriesSwap = strategy.requires.includes("swap");
   const key = poolKeyFor(params.collateralToken, params.loanToken, poolFee, poolSpacing, poolHooks);
-  const feeBps = file.offer.buy ? await c.feeBps() : 0n;
-  const lenderFeeBps = file.offer.buy ? 0n : await c.lenderFeeBps();
+  const quote = await quoteRouteFill(context, pinned, route, file.offer.buy ? 'borrow' : 'buy', units, fillCost(file.offer, units));
   let floor: Awaited<ReturnType<typeof swapFloor>> | undefined;
   if (carriesSwap) {
+    await assertRouteSwapCapability(context, pinned, route, { useQuoter: typeof v['min-out'] !== 'string' && !!ctx.profile.v4Quoter });
     if (!poolKeyCarries(key, params.loanToken, params.collateralToken)) fail("the pool key does not name this market's pair");
     // The swap spends what the fill produced, so its input is the principal after the router's fee.
-    const cost = fillCost(file.offer, units);
-    const { principalAfterFee } = await c.quoteLeg(units, cost);
+    const principalAfterFee = quote.net;
     const tokenIn = strategy.id === "leveredLong" ? o.numeraire : o.asset;
     const inDecimals = tokenIn.toLowerCase() === params.loanToken.toLowerCase() ? loanDecimals : collateralDecimals;
     const outDecimals = inDecimals === loanDecimals ? collateralDecimals : loanDecimals;
     floor = await swapFloor({
-      call: c.ethCall, key, tokenIn, amountIn: principalAfterFee, slippageBps,
+      call: async (to, data) => (await context.limited(() => pinned.rpc.call!({ to, data, blockNumber: pinned.blockNumber }))).data ?? '0x', key, tokenIn, amountIn: principalAfterFee, slippageBps,
       explicit: typeof v["min-out"] === "string" ? parseAmount(v["min-out"], outDecimals) : undefined,
       quoter: ctx.profile.v4Quoter, stateView: ctx.profile.v4StateView,
     });
@@ -448,9 +444,10 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
     units,
     poolKey: carriesSwap ? key : undefined,
     minOut: floor?.minOut,
-    feeBps,
-    lenderFeeBps,
+    exactFee: quote.fee,
   });
+  if (BigInt(build.legs.length + (carriesSwap ? 1 : 0)) > route.maxLegs) fail('Program exceeds admitted router MAX_LEGS');
+  const c = new StrategyRouterClient(ctx.profile, signing ? accountFor(ctx) : undefined, route.router);
   // What the router may draw from the account: the collateral top-up on a bid, cost plus lender fee on an ask.
   const approvals: [Address, bigint][] = file.offer.buy
     ? [[params.collateralToken, build.derived.maxTopUp]]
@@ -615,8 +612,19 @@ function renderPlan(plan: TradePlan, loanDecimals: number): string[] {
   return lines;
 }
 
+async function assertLegacyDirectRoute(ctx: Ctx, params: Pick<MarketParams, 'gate' | 'maturity'>, secondarySell = false): Promise<void> {
+  if (params.gate.toLowerCase() === ZERO_ADDRESS) return;
+  // Wall time only skips an unnecessary RPC for clearly future series; only pinned chain maturity admits recovery.
+  if (secondarySell && params.maturity <= BigInt(Math.floor(Date.now() / 1000))) {
+    const pinned = await new ActionContext({ profile: ctx.profile }).pin();
+    if (pinned.timestamp >= params.maturity) return;
+  }
+  fail('UNSUPPORTED_ACTION: gated direct-Core trade/borrow is unsupported here. Use unsigned action_preview (buy_dcn or explicit borrow) or strategy program with an admitted router and exact fee quotes. No approval or signing was attempted.');
+}
+
 async function runTrade(ctx: Ctx, side: "buy" | "sell"): Promise<void> {
   const { params, loanDecimals } = await resolveMarket(ctx);
+  await assertLegacyDirectRoute(ctx, params, side === 'sell');
   const { entries, source } = await loadBookEntries(ctx, params);
   const v = ctx.values;
   const request: TradePlanRequest = {
@@ -995,6 +1003,7 @@ async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
 async function wizardBorrow(ctx: Ctx, rl: Asker): Promise<void> {
   const c = client(ctx, false);
   const chosen = await pickMarketInteractive(ctx, c, rl);
+  await assertLegacyDirectRoute(ctx, chosen.market.params);
   if (chosen.itm) console.log("Note: this market's floor is above spot — favorable to borrowers (principal exceeds collateral value); defaulting at maturity is rational.");
   const live = await loadBookInteractive(ctx, rl, chosen.market.params);
   const bids = sortSide(live, "bid");
@@ -1039,6 +1048,7 @@ async function wizardTrade(ctx: Ctx, rl: Asker): Promise<void> {
   const dir = (await rl.ask("Direction buy=buy DCN / sell=sell held DCN: ")).trim().toLowerCase();
   if (dir !== "buy" && dir !== "sell") fail("direction must be buy or sell");
   const chosen = await pickMarketInteractive(ctx, c, rl, dir === "sell" ? 'exit' : 'newBusiness');
+  await assertLegacyDirectRoute(ctx, chosen.market.params, dir === 'sell');
   const live = await loadBookInteractive(ctx, rl, chosen.market.params);
   const asks = aggregateLevels(sortSide(live, "ask")).slice(0, 5);
   const bids = aggregateLevels(sortSide(live, "bid")).slice(0, 5);
@@ -1619,6 +1629,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   "borrow quote": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
     assertNewBusinessMarket(ctx.profile, file.offer);
+    await assertLegacyDirectRoute(ctx, file.offer);
     const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     const collateralDecimals = await tokenDecimals(ctx, file.offer.collateralToken);
     const units = typeof ctx.values.units === "string" ? parseAmount(ctx.values.units, loanDecimals) : file.offer.maxUnits;
@@ -1639,6 +1650,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
   "borrow execute": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
     assertNewBusinessMarket(ctx.profile, file.offer);
+    await assertLegacyDirectRoute(ctx, file.offer);
     const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     const units = parseAmount(need(ctx.values.units as string | undefined, "units"), loanDecimals);
     const c = client(ctx, true);

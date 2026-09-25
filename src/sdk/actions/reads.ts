@@ -45,11 +45,12 @@ export async function marketDetails(service: ActionContext, marketId: Hex, signa
     sellAfterMaturity: { supported: executionProfile, scope: 'conditional_on_maturity_credit_and_exact_fill_simulation', reason: 'CORE_DISALLOWS_NEW_DEBT_AFTER_MATURITY' },
     borrow: { separateAction: true, scope: 'explicit_origination_with_admitted_router_and_exact_fill_quote' },
   };
+  const feeSemantics = { authoritative: 'per_fill_router_quote', basis: 'router_defined', documentedConvention: 'premium=max(face-coreCost,0); getter BPS are not a percentage of core cost', cap: 'deployment_dependent', borrowQuote: ['quoteFee', 'quoteLeg'], buyQuote: 'quoteLenderFee' };
   if (ctx.snapshot.omitted.length) {
     ctx.snapshot.coverage = "partial";
     warnings.push({ code: "PARTIAL_COVERAGE", severity: "warning", message: "Some route or fee capabilities could not be verified; missing fees are not zero." });
   }
-  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, ...status, routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", feeQuoteRequired: true, dcnCapabilities, discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
+  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, ...status, routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", feeQuoteRequired: true, feeSemantics, dcnCapabilities, discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
 }
 export async function accountState(service: ActionContext, ctx: ReadContext, marketId: Hex, account: Address) {
   const market = await service.market(marketId, ctx.signal);

@@ -72,6 +72,8 @@ test('market details expose actual admitted router, conditional DCN safety and u
   const r=await marketDetails(f.context,market.id);
   if(broken){assert.equal(r.snapshot!.coverage,'partial');assert.equal(r.data.fees,null);assert.ok(r.warnings.length);}
   else assert.equal(r.data.fees!.router,a(9));
+  assert.equal((r.data as any).feeSemantics.authoritative,'per_fill_router_quote');
+  assert.equal((r.data as any).feeSemantics.basis,'router_defined');
   assert.equal((r.data as any).dcnCapabilities.sellBeforeMaturity.supported,false);
   assert.match((r.data as any).dcnCapabilities.sellBeforeMaturity.reason,/NO_SECONDARY_ONLY_GUARD/);
  }
