@@ -1,4 +1,5 @@
 import { getAddress, isAddress } from 'viem';
+import { productMarketStatus } from '../productMarketPolicy.ts';
 import { type Address, type MarketParams, ZERO_ADDRESS } from '../types.ts';
 import { type SpotRef, spotPxFor } from '../strategies/gather.ts';
 import { getStrategy } from '../strategies/catalog.ts';
@@ -66,6 +67,7 @@ export class StrategyFlowService {
   const decimals=new Map<string,Promise<number>>();const dec=(address:Address)=>{const key=address.toLowerCase();let value=decimals.get(key);if(!value){value=tokenDecimals(context,ctx,address);decimals.set(key,value);}return value;};
   const rows:PoolRow[]=[];
   for(const market of discovered){
+   if(!productMarketStatus(profile,market.params,ctx.timestamp).newBusiness)continue;
    const p=market.params,loanSymbol=symbols.get(p.loanToken.toLowerCase()),collateralSymbol=symbols.get(p.collateralToken.toLowerCase());
    if(!loanSymbol||!collateralSymbol||p.maturity!==BigInt(input.maturity)||p.maturity<=ctx.timestamp||classifyLine(loanSymbol,collateralSymbol)!==strategy.line||!same(strategy.line==='credit'?p.collateralToken:p.loanToken,token[1].address))continue;
    uint(p.strike,'strike',true);rows.push({market,loanSymbol,collateralSymbol,loanDecimals:await dec(p.loanToken),collateralDecimals:await dec(p.collateralToken)});

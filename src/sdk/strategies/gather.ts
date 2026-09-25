@@ -4,6 +4,7 @@
 // the pair feed's spot (re-oriented to "numeraire per whole asset"), and a fill price (an explicit
 // WAD, a target simple APR, or the live book's best bid/ask). Errors are thrown, never printed.
 import type { BiviumClient } from "../client.ts";
+import { assertNewBusinessMarket, productMarketStatus } from '../productMarketPolicy.ts';
 import { discoverMarketsOnChain, fetchRelayerMarkets, type DiscoveredMarket } from "../discovery.ts";
 import { formatAmount, parseAmount } from "../math.ts";
 import { sortSide, type BookEntry } from "../orderbook.ts";
@@ -194,10 +195,11 @@ export async function gatherStrategyInputs(
   const now = req.now ?? BigInt(Math.floor(Date.now() / 1000));
   if (req.maturity <= now) throw new Error("maturity is in the past");
 
-  const rows = req.rows ?? (await poolRowsFor(profile, client, await loadDiscoveredMarkets(profile, client, req.market)));
+  const rows = req.rows ?? (await poolRowsFor(profile, client, (await loadDiscoveredMarkets(profile, client, req.market)).filter(m => productMarketStatus(profile, m.params, now).newBusiness)));
   // Choose the actual maturity/token family before its reference: a different numeraire's price
   // must never rank these rungs, even when both numeraires are classified as stable.
   const candidates = rows.filter((r) => {
+    if (!productMarketStatus(profile, r.market.params, now).newBusiness) return false;
     if (classifyLine(r.loanSymbol, r.collateralSymbol) !== strategy.line || r.market.params.maturity !== req.maturity) return false;
     const o = orientation(strategy.line, r);
     return o.asset.toLowerCase() === asset.address.toLowerCase()
@@ -300,6 +302,8 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
 }
 
 export interface PlanRequest {
+  /** Planning time; injection point for deterministic hosts/tests. Cached quotes are rechecked. */
+  now?: bigint;
   /** Deployed StrategyRouter. Defaults to the profile's, which is what a gated market requires: a market naming an
    *  OriginationGate admits a borrower's own origination ONLY through a listed fee-bearing router. */
   router?: Address;
@@ -310,6 +314,8 @@ export interface PlanRequest {
 
 /** The bounded plan for a gathered quote — swap direction and the minOut unit follow the strategy. */
 export function planFromGathered(profile: DeploymentProfile, g: GatheredStrategy, req: PlanRequest = {}): Plan {
+  const now = req.now ?? BigInt(Math.floor(Date.now() / 1000));
+  assertNewBusinessMarket(profile, g.res.row.market.params, now);
   const s = g.res.strategy;
   const needsSwap = s.requires.includes("swap");
   const buysAsset = s.id === "leveredLong"; // the swap BUYS the asset; every other swap sells it
@@ -321,5 +327,5 @@ export function planFromGathered(profile: DeploymentProfile, g: GatheredStrategy
       : { sellToken: g.res.asset, buyToken: g.res.numeraire, minOut: minOut! }
     : undefined;
   const router = req.router ?? profile.strategyRouter;
-  return buildPlan(g.res, g.quote, { now: g.now, core: profile.core, router, swap, ttlSeconds: req.ttlSeconds });
+  return buildPlan(g.res, g.quote, { now, core: profile.core, router, swap, ttlSeconds: req.ttlSeconds });
 }

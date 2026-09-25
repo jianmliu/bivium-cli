@@ -1,4 +1,5 @@
 import { parseAbi } from "viem";
+import { productMarketStatus } from '../productMarketPolicy.ts';
 import { erc20Abi } from "../abi.ts";
 import { formatAmount } from "../math.ts";
 import { offerCap, remainingFace, fillCost, sortSide, aggregateLevels, reconcileConsumedEntries, planSweepByFace, makerBackingKey, validateGroups, entryFromSignedOffer, type MakerBacking, type Side } from "../orderbook.ts";
@@ -48,7 +49,7 @@ export async function marketDetails(service: ActionContext, marketId: Hex, signa
     ctx.snapshot.coverage = "partial";
     warnings.push({ code: "PARTIAL_COVERAGE", severity: "warning", message: "Some route or fee capabilities could not be verified; missing fees are not zero." });
   }
-  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, matured: ctx.timestamp >= p.maturity, routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
+  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, ...productMarketStatus(service.profile, p, ctx.timestamp), routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
 }
 export async function accountState(service: ActionContext, ctx: ReadContext, marketId: Hex, account: Address) {
   const market = await service.market(marketId, ctx.signal);

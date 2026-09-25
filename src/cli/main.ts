@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // bivium — CLI over the Bivium SDK (core-v1 lineage). See docs/spec/2026-08-09-bivium-cli-spec.md.
 import { randomBytes } from "node:crypto";
+import { assertNewBusinessMarket, productMarketStatus } from '../sdk/productMarketPolicy.ts';
 import { readdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -93,7 +94,7 @@ const USAGE = `bivium — Bivium market lifecycle CLI (core-v1)
 
 usage: bivium <command> [options]
 
-  market list [--source chain|relayer] [--from-block N]   # discover EXISTING markets — join, don't fragment
+  market list [--source chain|relayer] [--from-block N] [--include-history]   # new-business markets by default; history includes delisted/matured
   market id|state       compute the market id / read MarketState
   portfolio [--account <addr>] [--dir <orders>]   # aggregated positions/DCN/escrow/orders across all markets
   read position|credit|liquidity --account <addr>
@@ -193,6 +194,7 @@ const OPTIONS = {
   "via-api": { type: "boolean", default: false },
   "from-block": { type: "string" },
   "acknowledge-itm": { type: "boolean", default: false },
+  "include-history": { type: "boolean", default: false },
   borrower: { type: "string" },
   taker: { type: "string" },
   keep: { type: "string" },
@@ -326,6 +328,8 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   human: string[];
 }> {
   const v = ctx.values;
+  const openingFile = v.unwind === true ? undefined : parseSignedOfferFile(readFileSync(need(v.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+  if (openingFile) assertNewBusinessMarket(ctx.profile, openingFile.offer);
   const router = getAddress(
     typeof v.router === "string" ? v.router : (ctx.profile.strategyRouter ?? fail("no --router and the profile has no strategyRouter for this chain")),
   ) as Address;
@@ -375,7 +379,7 @@ async function buildStrategyProgram(ctx: Ctx, signing: boolean): Promise<{
   }
 
   const strategy = getStrategy(need(v.strategy as string | undefined, "strategy"));
-  const file = parseSignedOfferFile(readFileSync(need(v.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+  const file = openingFile!;
   const params = marketParamsFromOffer(file.offer);
   // A gated market decides which router it accepts, and this deployment runs more than one gate generation at
   // once — the fee rule changed by opening a new series, not by changing a setting. So the profile's router is a
@@ -690,6 +694,7 @@ const { params, loanDecimals, collateralDecimals } = market;
   const side = need(ctx.values.side as string | undefined, "side");
   if (side !== "buy" && side !== "sell") fail("--side must be buy or sell");
   if (side === "buy") {
+    assertNewBusinessMarket(ctx.profile, params);
     // Economic guardrail (display-only spot, never part of the offer): a buy bid on a market
     // whose floor sits at/above spot buys collateral above market — the borrower's rational
     // strategy is to default, so a near-par lend price is a guaranteed loss.
@@ -737,6 +742,7 @@ const { params, loanDecimals, collateralDecimals } = market;
     const credit = await c.creditOf(marketId, account.address as Address);
     if (credit < maxUnits) {
       const assertIssuanceOpen = () => {
+        assertNewBusinessMarket(ctx.profile, params);
         if (BigInt(Math.floor(Date.now() / 1000)) >= params.maturity) {
           fail("this ask exceeds held credit, but new issuance is closed at or after maturity. Reduce the order to held credit or acquire more credit to sell without adding debt.");
         }
@@ -843,13 +849,13 @@ interface WizardMarketRow {
 
 type Asker = ReturnType<typeof makeAsker>;
 
-async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Promise<WizardMarketRow> {
+async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker, purpose: 'newBusiness' | 'exit' = 'newBusiness'): Promise<WizardMarketRow> {
   const fromBlock = BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock"));
   console.log("Scanning for existing on-chain markets (join, don't fragment liquidity)…");
   const markets = await discoverMarketsOnChain(c, { fromBlock });
   const now = BigInt(Math.floor(Date.now() / 1000));
-  const active = markets.filter((m) => m.params.maturity > now);
-  if (active.length === 0) fail("no active (unmatured) markets found");
+  const active = markets.filter((m) => purpose === 'exit' || productMarketStatus(ctx.profile, m.params, now).newBusiness);
+  if (active.length === 0) fail("no eligible markets found");
   const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
   const spots = new Map<string, PairRatio | null>();
   const rows: WizardMarketRow[] = [];
@@ -870,6 +876,7 @@ async function pickMarketInteractive(ctx: Ctx, c: BiviumClient, rl: Asker): Prom
     const loanSym = loan?.sym ?? m.params.loanToken.slice(0, 8);
     const collSym = coll?.sym ?? m.params.collateralToken.slice(0, 8);
     const flags = [
+      ...productMarketStatus(ctx.profile, m.params, now).reasons.map(reason => `[${reason}]`),
       m.params.gate === ZERO_ADDRESS ? "" : "[gated]",
       spot?.mock ? `[${mockReferenceLabel(spot)}]` : '',
       money === null ? "" : money.itm ? `[ITM ⚠ LTV ${(money.ratio * 100).toFixed(0)}%]` : `[OTM · LTV ${(money.ratio * 100).toFixed(0)}%]`,
@@ -908,9 +915,9 @@ async function loadBookInteractive(ctx: Ctx, rl: Asker, params: MarketParams): P
 
 async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
   const c = client(ctx, false);
-  const chosen = await pickMarketInteractive(ctx, c, rl);
   const sideAnswer = (await rl.ask("Side buy=lend (resting bid) / sell=sell held DCN [buy]: ")).trim().toLowerCase() || "buy";
   if (sideAnswer !== "buy" && sideAnswer !== "sell") fail("side must be buy or sell");
+  const chosen = await pickMarketInteractive(ctx, c, rl, sideAnswer === "sell" ? 'exit' : 'newBusiness');
   if (chosen.itm && sideAnswer === "buy") {
     const go = (await rl.ask("⚠ This market's floor is ABOVE spot — lending near par is a guaranteed loss (defaulting is the borrower's rational move). Type yes-itm to continue: ")).trim();
     if (go !== "yes-itm") fail("aborted at the ITM confirmation");
@@ -952,6 +959,7 @@ async function wizardLend(ctx: Ctx, rl: Asker): Promise<void> {
       }
       const fund = (await rl.ask(`Deposit the ${formatAmount(shortfall, chosen.loanDec)} ${chosen.loanSym} shortfall into market escrow? [y/N]: `)).trim().toLowerCase();
       if (fund === "y") {
+        assertNewBusinessMarket(ctx.profile, chosen.market.params);
         const tx = await sc.fund(chosen.market.params, shortfall);
         console.log(`funded: ${tx.hash}`);
       }
@@ -998,6 +1006,7 @@ async function wizardBorrow(ctx: Ctx, rl: Asker): Promise<void> {
   const pick = Number((await rl.ask(`Select offer [1-${Math.min(5, bids.length)}]: `)).trim());
   if (!Number.isInteger(pick) || pick < 1 || pick > Math.min(5, bids.length)) fail("invalid offer selection");
   const bid = bids[pick - 1];
+  assertNewBusinessMarket(ctx.profile, bid.offer);
   const amount = (await rl.ask(`Borrow face (≤ ${formatAmount(bid.size, chosen.loanDec)} ${chosen.loanSym}): `)).trim();
   const units = parseAmount(amount, chosen.loanDec);
   if (units <= 0n || units > bid.size) fail("units out of range for the selected offer");
@@ -1017,6 +1026,7 @@ async function wizardBorrow(ctx: Ctx, rl: Asker): Promise<void> {
   }
   const confirm = (await rl.ask("Confirm borrow and lock collateral? [y/N]: ")).trim().toLowerCase();
   if (confirm !== "y") fail("aborted before borrowing");
+  assertNewBusinessMarket(ctx.profile, bid.offer);
   const result = await sc.fillAsBorrower(bid.offer, bid.signature, units);
   const date = new Date(Number(bid.offer.maturity) * 1000).toISOString();
   console.log(`Borrowed: received ${formatAmount(result.principal, chosen.loanDec)} ${chosen.loanSym} — tx ${result.hash}`);
@@ -1026,15 +1036,15 @@ async function wizardBorrow(ctx: Ctx, rl: Asker): Promise<void> {
 
 async function wizardTrade(ctx: Ctx, rl: Asker): Promise<void> {
   const c = client(ctx, false);
-  const chosen = await pickMarketInteractive(ctx, c, rl);
+  const dir = (await rl.ask("Direction buy=buy DCN / sell=sell held DCN: ")).trim().toLowerCase();
+  if (dir !== "buy" && dir !== "sell") fail("direction must be buy or sell");
+  const chosen = await pickMarketInteractive(ctx, c, rl, dir === "sell" ? 'exit' : 'newBusiness');
   const live = await loadBookInteractive(ctx, rl, chosen.market.params);
   const asks = aggregateLevels(sortSide(live, "ask")).slice(0, 5);
   const bids = aggregateLevels(sortSide(live, "bid")).slice(0, 5);
   console.log("Order book:");
   asks.forEach((l) => console.log(`  ASK  ${formatAmount(l.size, chosen.loanDec)} @ ${formatAmount(l.price, 18)} (tick ${l.tick})`));
   bids.forEach((l) => console.log(`  BID  ${formatAmount(l.size, chosen.loanDec)} @ ${formatAmount(l.price, 18)} (tick ${l.tick})`));
-  const dir = (await rl.ask("Direction buy=buy DCN / sell=sell held DCN: ")).trim().toLowerCase();
-  if (dir !== "buy" && dir !== "sell") fail("direction must be buy or sell");
   const request: { units?: bigint; spend?: bigint; limitTick?: bigint } = {};
   if (dir === "buy") {
     const mode = (await rl.ask("By face units or exact spend? [units/spend]: ")).trim().toLowerCase();
@@ -1080,6 +1090,8 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
         : BigInt(ctx.profile.coreDeploymentBlock ?? fail("profile has no coreDeploymentBlock — pass --from-block"));
       markets = await discoverMarketsOnChain(c, { fromBlock });
     }
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (ctx.values['include-history'] !== true) markets = markets.filter(m => productMarketStatus(ctx.profile, m.params, now).newBusiness);
     const bySymbol = new Map(Object.entries(ctx.profile.tokens ?? {}).map(([sym, t]) => [t.address.toLowerCase(), { sym, dec: t.decimals }]));
     // Display-only pair ratios for moneyness flags; one fetch per pair, failures degrade to "?".
     const spots = new Map<string, PairRatio | null>();
@@ -1102,7 +1114,9 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       const money = spot !== null && floor !== "?" && floor !== "(off-grid)" ? assessMoneyness(floor, spot.loanPerCollateral) : null;
       const moneyLabel = money === null ? "" : money.itm ? `  LTV ${(money.ratio * 100).toFixed(0)}% [ITM ⚠ the collateral no longer covers the debt]` : `  LTV ${(money.ratio * 100).toFixed(0)}% OTM`;
       const pair = `${coll?.sym ?? m.params.collateralToken.slice(0, 8)}/${loan?.sym ?? m.params.loanToken.slice(0, 8)}`;
-      rows.push({ id: m.id, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money, ...(spot?.mock ? { spotReference: spot } : {}) });
+      const status = productMarketStatus(ctx.profile, m.params, now);
+      rows.push({ id: m.id, ...status, pair, floor, maturity: m.params.maturity, activeCredit: state.activeCredit, repaidCredit: state.repaidCredit, gate: m.params.gate, moneyness: money, ...(spot?.mock ? { spotReference: spot } : {}) });
+      if (status.reasons.length) lines.push(`[${status.reasons.join(', ')}] newBusiness=false`);
       lines.push(`${pair}  strike ${floor.startsWith("(") || floor === "?" ? floor : fmtStrikeUnit(floor, loan?.sym ?? "loan", coll?.sym ?? "coll")}  maturity ${m.params.maturity}  active ${loan ? formatAmount(state.activeCredit, loan.dec) : state.activeCredit}  repaid ${loan ? formatAmount(state.repaidCredit, loan.dec) : state.repaidCredit}${m.params.gate === ZERO_ADDRESS ? "" : "  [gated]"}${moneyLabel}\n    ${m.id}`);
       if (spot?.mock) lines.push(`    ${mockReferenceLabel(spot)}`);
     }
@@ -1320,8 +1334,19 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (getAddress(parsed.offer.ratifier) !== getAddress(setter)) {
         fail(`${f} names ratifier ${parsed.offer.ratifier}, not the setter ${setter} — remake it with --ratifier setter`);
       }
-      return { path: f, commitment: parsed.commitment };
+      return { path: f, commitment: parsed.commitment, offer: parsed.offer };
     });
+    if (ctx.values.off !== true) {
+      const reader = client(ctx, false);
+      for (const { offer } of loaded) {
+        if (productMarketStatus(ctx.profile, offer).newBusiness) continue;
+        if (offer.buy) assertNewBusinessMarket(ctx.profile, offer);
+        const credit = await reader.creditOf(reader.marketId(offer), offer.maker);
+        const consumed = await reader.consumed(offer.maker, offer.group);
+        // Current held-credit exits remain available; opaque commitments carry no market identity.
+        if (credit < remainingFace(offer, consumed, tickToPrice(offer.tick))) assertNewBusinessMarket(ctx.profile, offer);
+      }
+    }
     if (loaded.length) list = loaded.map((l) => l.commitment);
     if (!list.length) fail("--offer <file>[,<file>...] or --commitment <hash>[,<hash>...] is required");
     for (const h of list) if (!/^0x[0-9a-fA-F]{64}$/.test(h)) fail(`not a commitment: ${h}`);
@@ -1354,6 +1379,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "maker fund": async (ctx) => {
     const { params, loanDecimals } = await resolveMarket(ctx);
+    assertNewBusinessMarket(ctx.profile, params);
     const assets = parseAmount(need(ctx.values.assets as string | undefined, "assets"), loanDecimals);
     const c = client(ctx, true);
     const tx = await c.fund(params, assets);
@@ -1362,6 +1388,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "maker escrow": async (ctx) => {
     const { params, collateralDecimals } = await resolveMarket(ctx);
+    assertNewBusinessMarket(ctx.profile, params);
     const amount = parseAmount(need(ctx.values.assets as string | undefined, "assets"), collateralDecimals);
     const c = client(ctx, true);
     const tx = await c.escrowCollateral(params, amount);
@@ -1591,6 +1618,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "borrow quote": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+    assertNewBusinessMarket(ctx.profile, file.offer);
     const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     const collateralDecimals = await tokenDecimals(ctx, file.offer.collateralToken);
     const units = typeof ctx.values.units === "string" ? parseAmount(ctx.values.units, loanDecimals) : file.offer.maxUnits;
@@ -1610,6 +1638,7 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   "borrow execute": async (ctx) => {
     const file = parseSignedOfferFile(readFileSync(need(ctx.values.offer as string | undefined, "offer"), "utf8"), ctx.profile);
+    assertNewBusinessMarket(ctx.profile, file.offer);
     const loanDecimals = await tokenDecimals(ctx, file.offer.loanToken);
     const units = parseAmount(need(ctx.values.units as string | undefined, "units"), loanDecimals);
     const c = client(ctx, true);

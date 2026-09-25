@@ -1,4 +1,5 @@
 import { encodeFunctionData, isAddress, type Abi } from 'viem';
+import { assertNewBusinessMarket } from '../productMarketPolicy.ts';
 import { erc20Abi } from '../abi.ts';
 import { entryFromSignedOffer, fillCost } from '../orderbook.ts';
 import { validateTradePlan } from '../trade.ts';
@@ -22,6 +23,7 @@ export async function evaluateTradeAction(context:ActionContext,intent:ActionInt
  const deadline=raw(intent.deadline,'deadline',true);if(deadline<=ctx.timestamp)throw new ActionError('INVALID_ARGUMENT','deadline has passed');
  if(!intent.fills?.length||intent.fills.length>64)throw new ActionError('INVALID_ARGUMENT','Provide 1–64 exact signed fills');
  const market=await context.market(intent.marketId,ctx.signal),p=market.params;
+ if(intent.action!=='sell_dcn')assertNewBusinessMarket(context.profile,p,ctx.timestamp);
  if(intent.action==='sell_dcn'&&ctx.timestamp<p.maturity)throw new ActionError('UNSUPPORTED_ACTION','Core has no secondary-only origination guard before maturity; unsigned sell could create debt if credit changes before mining');
  let strategy;
  if(intent.action==='strategy_program'){try{strategy=getStrategy(intent.strategyId??'');}catch(e){throw new ActionError('INVALID_ARGUMENT',e instanceof Error?e.message:'Unknown strategy');}}
