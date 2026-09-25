@@ -32,7 +32,10 @@ test('Mock source expiry bounds the router calldata deadline as well as service 
  const p=await flow.preview(f.input);const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'ready');
  if(ready.data.kind==='ready'){
   const decoded=decodeFunctionData({abi:routerAbi,data:ready.data.transaction.data});
-  assert.equal(decoded.functionName,'execute');assert.equal((decoded.args as any)[1],2010n);
+  assert.equal(decoded.functionName,'execute');const deadline=(decoded.args as any)[1] as bigint;
+  assert.equal(deadline,2009n);
+  // The pinned router accepts block.timestamp <= deadline, but source expiry is exclusive.
+  assert.equal(2009n<=deadline,true);assert.equal(2010n<=deadline,false);
  }
 });
 test('already-expired source and source expiring during resolution refuse a preview',async(t)=>{
