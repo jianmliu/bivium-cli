@@ -4,6 +4,7 @@
 // the pair feed's spot (re-oriented to "numeraire per whole asset"), and a fill price (an explicit
 // WAD, a target simple APR, or the live book's best bid/ask). Errors are thrown, never printed.
 import type { BiviumClient } from "../client.ts";
+import { assertNewBusinessMarket, productMarketStatus } from '../productMarketPolicy.ts';
 import { discoverMarketsOnChain, fetchRelayerMarkets, type DiscoveredMarket } from "../discovery.ts";
 import { formatAmount, parseAmount } from "../math.ts";
 import { sortSide, type BookEntry } from "../orderbook.ts";
@@ -11,6 +12,7 @@ import { resolveToken } from "../profile.ts";
 import { adapterFor } from "../lineage.ts";
 import { fetchRelayerBook, requireRelayerV2, type RelayerDomain } from "../relayer.ts";
 import { fetchPairRatio, pairFor } from "../spot.ts";
+import { mockReferenceDirection, type MockReferenceMetadata, type ReferenceTokens } from '../mockReference.ts';
 import { priceFromSimpleAprBps } from "../tick.ts";
 import type { Address, DeploymentProfile, MarketParams } from "../types.ts";
 import { getStrategy } from "./catalog.ts";
@@ -77,7 +79,7 @@ export async function poolRowsFor(
   return rows;
 }
 
-export interface SpotRef {
+export interface SpotRef extends Partial<MockReferenceMetadata> {
   /** Numeraire per whole asset, WAD — advisory; every derived figure is an estimate. */
   px: PxWad;
   status: "ready" | "stale";
@@ -91,15 +93,22 @@ export interface SpotRef {
  * "numeraire per asset" on the credit line and its reciprocal on options/exchange.
  */
 export async function spotPxFor(
-  relayerUrl: string | undefined,
+  profileOrUrl: DeploymentProfile | string | undefined,
   line: Line,
   loanSymbol: string | undefined,
   collateralSymbol: string | undefined,
+  tokens?: ReferenceTokens,
 ): Promise<SpotRef> {
   const pair = pairFor(collateralSymbol, loanSymbol);
   if (!pair) throw new Error("cannot name the spot pair — both legs must be profile token symbols");
-  const ratio = await fetchPairRatio(relayerUrl, pair, { stat: "sigma21d" });
+  const ratio = await fetchPairRatio(profileOrUrl, pair, { stat: "sigma21d", ...tokens });
   if (!ratio) throw new Error(`spot unavailable for ${pair} (profile.relayerUrl /spot) — the engine cannot place a strike buffer without it`);
+  if (ratio.mock && ratio.mnvdaBusdWad !== undefined && typeof profileOrUrl === 'object' && tokens) {
+    const direct = mockReferenceDirection(profileOrUrl, tokens) === 'direct';
+    const px = (line === 'credit') === direct ? ratio.mnvdaBusdWad : 10n ** 36n / ratio.mnvdaBusdWad;
+    if (px <= 0n) throw new Error('Mock spot is below WAD precision');
+    return { px, status: ratio.status, pair, mock: true, source: ratio.source, observedAt: ratio.observedAt, expiresAt: ratio.expiresAt };
+  }
   const x = line === "credit" ? ratio.loanPerCollateral : 1 / ratio.loanPerCollateral;
   return { px: parseAmount(x.toFixed(18), 18), status: ratio.status, pair, ...(ratio.sigma21d !== undefined ? { sigmaAnnual: ratio.sigma21d } : {}) };
 }
@@ -163,6 +172,7 @@ export interface GatheredStrategy {
   quote: StrategyQuote;
   spot: PxWad;
   spotStatus: "ready" | "stale";
+  spotReference?: MockReferenceMetadata;
   pair: string;
   priceWad: bigint;
   priceFrom: string;
@@ -185,13 +195,23 @@ export async function gatherStrategyInputs(
   const now = req.now ?? BigInt(Math.floor(Date.now() / 1000));
   if (req.maturity <= now) throw new Error("maturity is in the past");
 
-  const rows = req.rows ?? (await poolRowsFor(profile, client, await loadDiscoveredMarkets(profile, client, req.market)));
-  // One spot fetch: any row on this line that carries the asset names the pair.
-  const probe = rows.find((r) => classifyLine(r.loanSymbol, r.collateralSymbol) === strategy.line && orientation(strategy.line, r).asset.toLowerCase() === asset.address.toLowerCase());
-  if (!probe) throw new Error(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address}`);
-  const spot = req.spot ?? (await spotPxFor(profile.relayerUrl, strategy.line, probe.loanSymbol, probe.collateralSymbol));
+  const rows = req.rows ?? (await poolRowsFor(profile, client, (await loadDiscoveredMarkets(profile, client, req.market)).filter(m => productMarketStatus(profile, m.params, now).newBusiness)));
+  // Choose the actual maturity/token family before its reference: a different numeraire's price
+  // must never rank these rungs, even when both numeraires are classified as stable.
+  const candidates = rows.filter((r) => {
+    if (!productMarketStatus(profile, r.market.params, now).newBusiness) return false;
+    if (classifyLine(r.loanSymbol, r.collateralSymbol) !== strategy.line || r.market.params.maturity !== req.maturity) return false;
+    const o = orientation(strategy.line, r);
+    return o.asset.toLowerCase() === asset.address.toLowerCase()
+      && (!counter || o.numeraire.toLowerCase() === counter.address.toLowerCase());
+  });
+  const probe = candidates[0];
+  if (!probe) throw new Error(`no ${strategy.line}-line market carries ${asset.symbol ?? asset.address} at maturity ${req.maturity}${counter ? ` against ${counter.symbol ?? counter.address}` : ''}`);
+  const pairs = new Set(candidates.map((r) => `${r.market.params.loanToken.toLowerCase()}:${r.market.params.collateralToken.toLowerCase()}`));
+  if (pairs.size !== 1) throw new Error('multiple quote-token pairs match this asset and maturity — specify counter');
+  const spot = req.spot ?? (await spotPxFor(profile, strategy.line, probe.loanSymbol, probe.collateralSymbol, probe.market.params));
 
-  const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity: req.maturity, bufferPct: req.bufferPct }, rows, spot.px);
+  const res = resolveStrategy({ strategyId: strategy.id, asset: asset.address, counter: counter?.address, size: 0n, maturity: req.maturity, bufferPct: req.bufferPct }, candidates, spot.px);
   const sizeDecimals = strategy.id === "lendQuote" ? res.numeraireDecimals : res.assetDecimals;
   const size = parseAmount(req.size, sizeDecimals);
 
@@ -227,6 +247,7 @@ export async function gatherStrategyInputs(
   const marketId = adapterFor(profile.abiProfile).computeMarketId({ chainId: profile.chainId, core: profile.core }, res.row.market.params);
   const quote = quoteStrategy({ resolution: res, priceWad, spot: spot.px, sigmaAnnual, now, marketId }, size);
   const gathered = { res, quote, spot: spot.px, spotStatus: spot.status, pair: spot.pair, priceWad, priceFrom, size, now, sigmaSource } as GatheredStrategy;
+  if (spot.mock) gathered.spotReference = { mock: true, source: spot.source!, observedAt: spot.observedAt!, expiresAt: spot.expiresAt! };
 
   // Parity: only on the live-book basis (an explicit price or APR has no app-side counterpart), only when a
   // loader exists. Never fatal — a missing app is "unavailable"; a disagreeing one is a loud "mismatch".
@@ -268,6 +289,7 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
     numeraireDecimals: res.numeraireDecimals,
     spot: g.spot,
     spotStatus: g.spotStatus,
+    ...(g.spotReference ? { spotReference: g.spotReference } : {}),
     pair: g.pair,
     priceWad: g.priceWad,
     priceFrom: g.priceFrom,
@@ -280,6 +302,8 @@ export function gatheredToJson(g: GatheredStrategy): Record<string, unknown> {
 }
 
 export interface PlanRequest {
+  /** Planning time; injection point for deterministic hosts/tests. Cached quotes are rechecked. */
+  now?: bigint;
   /** Deployed StrategyRouter. Defaults to the profile's, which is what a gated market requires: a market naming an
    *  OriginationGate admits a borrower's own origination ONLY through a listed fee-bearing router. */
   router?: Address;
@@ -290,6 +314,8 @@ export interface PlanRequest {
 
 /** The bounded plan for a gathered quote — swap direction and the minOut unit follow the strategy. */
 export function planFromGathered(profile: DeploymentProfile, g: GatheredStrategy, req: PlanRequest = {}): Plan {
+  const now = req.now ?? BigInt(Math.floor(Date.now() / 1000));
+  assertNewBusinessMarket(profile, g.res.row.market.params, now);
   const s = g.res.strategy;
   const needsSwap = s.requires.includes("swap");
   const buysAsset = s.id === "leveredLong"; // the swap BUYS the asset; every other swap sells it
@@ -301,5 +327,5 @@ export function planFromGathered(profile: DeploymentProfile, g: GatheredStrategy
       : { sellToken: g.res.asset, buyToken: g.res.numeraire, minOut: minOut! }
     : undefined;
   const router = req.router ?? profile.strategyRouter;
-  return buildPlan(g.res, g.quote, { now: g.now, core: profile.core, router, swap, ttlSeconds: req.ttlSeconds });
+  return buildPlan(g.res, g.quote, { now, core: profile.core, router, swap, ttlSeconds: req.ttlSeconds });
 }

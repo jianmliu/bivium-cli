@@ -14,11 +14,17 @@ export function strategyFixture(strategy:StrategyPreviewIntent['strategy']='lend
  const p={loanToken:credit?a(4):a(3),collateralToken:credit?a(3):a(4),maturity:10000n,strike:credit?8n*10n**23n:8n*10n**47n,allowPartialRepay:true,gate:ZERO_ADDRESS};
  const offer:Offer={...p,maker:a(5),buy:borrow,tick:4000n,maxUnits:10n**30n,maxAssets:0n,start:0n,expiry:6000n,group:`0x${'00'.repeat(32)}`,ratifier:a(2)};
  const calls:any[]=[], market={id:adapter.computeMarketId(profile,p),params:p};
- const rpc:any={getChainId:async()=>46630,getBlock:async()=>({number:10n,hash:`0x${'11'.repeat(32)}`,timestamp:100n}),readContract:async(r:any)=>{
+ const rpc:any={getChainId:async()=>46630,getBlock:async()=>({number:10n,hash:`0x${'11'.repeat(32)}`,timestamp:100n}),getBytecode:async(r:any)=>{calls.push({...r,functionName:'code'});return '0x6000';},readContract:async(r:any)=>{
   calls.push(r); if(r.functionName==='computeId')return adapter.computeMarketId(profile,{loanToken:ZERO_ADDRESS,collateralToken:ZERO_ADDRESS,maturity:1n,strike:1n,allowPartialRepay:false,gate:ZERO_ADDRESS});
   if(Object.hasOwn(overrides,r.functionName)){const v=overrides[r.functionName];if(v instanceof Error)throw v;return v;}
   if(r.functionName==='decimals')return r.address===a(3)?18:6;
   if(r.functionName==='creditOf')return r.args[1]===a(6)?0n:10n**30n;
+  if(['quoteFee','quoteLeg','quoteLenderFee'].includes(r.functionName)){
+   const [units,cost]=r.args as [bigint,bigint],ask=r.functionName==='quoteLenderFee',bps=overrides[ask?'LENDER_FEE_BPS':'FEE_BPS']??(ask?1000n:100n),premium=units>cost?units-cost:0n;
+   const raw=premium*(bps as bigint)/10000n,fee=!ask&&raw>cost?cost:raw;
+   return [fee,ask?cost+fee:cost-fee];
+  }
+  if(r.functionName==='POOL_MANAGER'||r.functionName==='poolManager')return a(11);
   return ({isRatifier:true,isRatified:RATIFIED,consumed:0n,collateralEscrowOf:10n**30n,liquidityOf:10n**30n,balanceOf:10n**30n,allowance:max,BIVIUM:a(1),MAX_LEGS:16n,FEE_BPS:100n,LENDER_FEE_BPS:1000n,grantOf:[4n,20000n],position:{debt:0n,collateral:0n,collateralWithdrawable:0n},routers:[a(8)],LENDER_MUST_ROUTE:true} as any)[r.functionName];
  }, call:async(r:any)=>{calls.push(r);return {data:encodeAbiParameters([{type:'uint256'}],[r.data.startsWith('0xc815641c')?(2n**96n)/1000000n:10n**30n])};},simulateContract:async(r:any)=>{calls.push({...r,simulation:true});return {};}};
  const entries=[entryFromSignedOffer(offer,adapter.offerCommitment(profile,offer),'0x')];

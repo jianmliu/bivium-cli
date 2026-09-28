@@ -16,6 +16,7 @@
 //   do NOT reuse the borrow-path matured guard, and instead require `creditOf(taker) ≥ units` so
 //   the fill cannot slip into new-debt origination.
 import { encodeFunctionData, type Account } from "viem";
+import { assertNewBusinessMarket } from './productMarketPolicy.ts';
 import { BiviumClient, type TxResult } from "./client.ts";
 import { adapterFor, type ChainDomain } from "./lineage.ts";
 import { marketParamsFromOffer } from "./offer.ts";
@@ -141,6 +142,7 @@ export class TradeClient extends BiviumClient {
     if ((request.units === undefined) === (request.spend === undefined)) {
       throw new Error("size the buy with exactly one of units or spend");
     }
+    for (const entry of entries.filter(e => !e.offer.buy)) assertNewBusinessMarket(this.profile, entry.offer);
     const book = filterByLimitTick(sortSide(await this.reconcileBook(entries), "ask"), "ask", request.limitTick);
     const backing = await this.loadBacking(book);
     let takes: SweepTake[];
@@ -311,6 +313,9 @@ export async function validateTradePlan(plan: TradePlan, env: {
   read: (request: { address: Address; abi: readonly unknown[]; functionName: string; args: readonly unknown[]; blockNumber: bigint }) => Promise<unknown>;
 }) {
   if (!plan.takes.length) throw new Error("nothing to fill — empty book");
+  if (plan.side === 'ask' || env.mode === 'borrow') {
+    for (const take of plan.takes) assertNewBusinessMarket(env.profile, take.entry.offer, env.block.timestamp);
+  }
   const adapter = adapterFor(env.profile.abiProfile), state: Record<string, unknown> = {};
   const read = async <T>(address: Address, abi: readonly unknown[], functionName: string, args: readonly unknown[]): Promise<T> => {
     const value = await env.read({ address, abi, functionName, args, blockNumber: env.block.number });

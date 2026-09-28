@@ -36,10 +36,10 @@
       }
     },
     "cli": {
-      "commit": "0323d698020fae43f454b716c540f1a09cde08fc",
+      "commit": "ad1f0cf925262133ffdded6603ed70e05763aee7",
       "files": {
         "src/cli/boundedKeeper.ts": "1b80dd582dde40a6283ed061f86fd657fdba3dcfa2f6405a4ce765f4c6135d39",
-        "src/cli/main.ts": "f748a6d2a1b3fe7ebd0d6d57cd19a951292116c6dd076e386b048ec68a63a42e",
+        "src/cli/main.ts": "9affad65ba47f85a183615a33b9bcec5a43b179a41dbade4e82f39922c60f508",
         "src/sdk/abi.ts": "d8175aaed58408b4efeec418b07107cef13ea2d16ca2516d69564c001eda60fe",
         "src/sdk/actions/calls.ts": "953ab06fdfa4c5eb071cb5757a6b745d789cebb22dcaea123b5b2af667b43a5f",
         "src/sdk/client.ts": "b181ade4fc2600941c2bf36b97b13976016338987ac9375e17cea48f3f3b226d",

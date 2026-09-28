@@ -13,6 +13,9 @@
 // ETH/BTC and read the comparison backwards on volatile-loan markets. S/R is also the market-level
 // LTV, so the same number that gates also explains.
 
+import type { DeploymentProfile } from './types.ts';
+import { fetchMockReference, mockReferenceDirection, type MockReferenceMetadata, type ReferenceTokens } from './mockReference.ts';
+
 /** The pair feed's ticker for a token symbol — the frontend's convention: WETH quotes as ETH,
  *  everything else as its uppercased symbol. */
 export function tickerFor(symbol: string | undefined): string | null {
@@ -30,7 +33,10 @@ export function pairFor(collateralSymbol: string | undefined, loanSymbol: string
   return base && quote ? `${base}-${quote}` : null;
 }
 
-export interface PairRatio {
+export interface PairRatio extends Partial<MockReferenceMetadata> {
+  /** Exact Mock WADs; numeric ratio below is for advisory display only. */
+  loanPerCollateralWad?: bigint;
+  mnvdaBusdWad?: bigint;
   /** Loan tokens per whole collateral at spot — the strike's unit. */
   loanPerCollateral: number;
   status: "ready" | "stale";
@@ -41,7 +47,13 @@ export interface PairRatio {
 }
 
 /** The deployment's pair feed; null on any failure — callers degrade to "moneyness unknown". */
-export async function fetchPairRatio(relayerUrl: string | undefined, pair: string, options: { stat?: string } = {}): Promise<PairRatio | null> {
+export async function fetchPairRatio(profileOrUrl: DeploymentProfile | string | undefined, pair: string, options: { stat?: string } & Partial<ReferenceTokens> = {}): Promise<PairRatio | null> {
+  const profile = typeof profileOrUrl === 'object' ? profileOrUrl : undefined;
+  const relayerUrl = profile ? profile.relayerUrl : profileOrUrl as string | undefined;
+  if (profile && mockReferenceDirection(profile, options)) {
+    const reference = await fetchMockReference(profile, options as ReferenceTokens);
+    return reference ? { ...reference, loanPerCollateral: Number(reference.loanPerCollateralWad) / 1e18, status: 'ready', assumed: [] } : null;
+  }
   if (!relayerUrl) return null;
   try {
     const stat = options.stat ? `&stat=${encodeURIComponent(options.stat)}` : "";

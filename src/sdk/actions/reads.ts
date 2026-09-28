@@ -1,4 +1,5 @@
-import { parseAbi } from "viem";
+import { resolveRouteAdmission } from './routeAdmission.ts';
+import { productMarketStatus } from '../productMarketPolicy.ts';
 import { erc20Abi } from "../abi.ts";
 import { formatAmount } from "../math.ts";
 import { offerCap, remainingFace, fillCost, sortSide, aggregateLevels, reconcileConsumedEntries, planSweepByFace, makerBackingKey, validateGroups, entryFromSignedOffer, type MakerBacking, type Side } from "../orderbook.ts";
@@ -11,8 +12,6 @@ import { ZERO_ADDRESS, type Address, type Hex, type MarketState, type Offer, typ
 import { ActionContext, upstream, type ReadContext } from "./context.ts";
 import { ActionError, result, type Amount, type Warning } from "./types.ts";
 
-const gateAbi = parseAbi(["function routers() view returns (address[])", "function LENDER_MUST_ROUTE() view returns (bool)"]);
-const routerAbi = parseAbi(["function FEE_BPS() view returns (uint256)", "function LENDER_FEE_BPS() view returns (uint256)"]);
 export function amount(raw: bigint, decimals: number, token: Address): Amount { return { raw: String(raw), decimals, human: formatAmount(raw, decimals), token }; }
 export async function tokenDecimals(service: ActionContext, ctx: ReadContext, token: Address): Promise<number> {
   const decimals = await service.read<number>(ctx, token, erc20Abi, "decimals");
@@ -29,26 +28,29 @@ export async function marketDetails(service: ActionContext, marketId: Hex, signa
   const warnings: Warning[] = [];
   let routing: { routers: Address[]; lenderMustRoute: boolean | null } | null = null;
   let fees: { router: Address; borrowerBps: bigint; lenderBps: bigint } | null = null;
-  if (p.gate !== ZERO_ADDRESS) {
-    try {
-      const routers = await service.read<Address[]>(ctx, p.gate, gateAbi, "routers");
-      const lenderMustRoute = await service.read<boolean>(ctx, p.gate, gateAbi, "LENDER_MUST_ROUTE").catch(() => null);
-      routing = { routers, lenderMustRoute };
-      if (lenderMustRoute === null) ctx.snapshot.omitted.push("gate.LENDER_MUST_ROUTE");
-    } catch { ctx.snapshot.omitted.push("gate.routing"); }
-  }
-  const router = service.profile.strategyRouter;
-  if (router && (!routing || routing.routers.some((r) => r.toLowerCase() === router.toLowerCase()))) {
-    try {
-      const [borrowerBps, lenderBps] = await Promise.all([service.read<bigint>(ctx, router, routerAbi, "FEE_BPS"), service.read<bigint>(ctx, router, routerAbi, "LENDER_FEE_BPS")]);
-      fees = { router, borrowerBps, lenderBps };
-    } catch { ctx.snapshot.omitted.push("router.fees"); }
-  }
+  try {
+    const route = await resolveRouteAdmission(service, ctx, p, { side: 'borrow', checkBothFees: true });
+    routing = { routers: route.routers, lenderMustRoute: route.lenderMustRoute };
+    if (route.router && route.feeBps !== null && route.lenderFeeBps !== null) fees = { router: route.router, borrowerBps: route.feeBps, lenderBps: route.lenderFeeBps };
+  } catch { ctx.snapshot.omitted.push('route.admission_and_fees'); }
+  if (!fees && !ctx.snapshot.omitted.length) ctx.snapshot.omitted.push('router.fees');
+  let buyRoute = false;
+  try { await resolveRouteAdmission(service, ctx, p, { side: 'buy' }); buyRoute = true; }
+  catch { ctx.snapshot.omitted.push('route.buy_admission'); }
+  const status = productMarketStatus(service.profile, p, ctx.timestamp);
+  const executionProfile = service.profile.chainId === 46630 && service.profile.abiProfile === 'core-v2';
+  const dcnCapabilities = {
+    buy: { supported: executionProfile && status.newBusiness && buyRoute, scope: 'conditional_on_exact_fill_quote_and_simulation', routerTrust: 'admitted_interface_checks_are_not_implementation_verification' },
+    sellBeforeMaturity: { supported: false, reason: 'NO_SECONDARY_ONLY_GUARD', scope: 'unsigned_service', detail: 'Credit may change before mining; donated or earlier-leg collateral can fund new debt even with maxTopUp zero and no inner legs.' },
+    sellAfterMaturity: { supported: executionProfile, scope: 'conditional_on_maturity_credit_and_exact_fill_simulation', reason: 'CORE_DISALLOWS_NEW_DEBT_AFTER_MATURITY' },
+    borrow: { separateAction: true, scope: 'explicit_origination_with_admitted_router_and_exact_fill_quote' },
+  };
+  const feeSemantics = { authoritative: 'per_fill_router_quote', basis: 'router_defined', documentedConvention: 'premium=max(face-coreCost,0); getter BPS are not a percentage of core cost', cap: 'deployment_dependent', borrowQuote: ['quoteFee', 'quoteLeg'], buyQuote: 'quoteLenderFee' };
   if (ctx.snapshot.omitted.length) {
     ctx.snapshot.coverage = "partial";
     warnings.push({ code: "PARTIAL_COVERAGE", severity: "warning", message: "Some route or fee capabilities could not be verified; missing fees are not zero." });
   }
-  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, matured: ctx.timestamp >= p.maturity, routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
+  return result({ marketId: market.id, identity: { chainId: service.profile.chainId, bivium: service.profile.core, ...p }, loanDecimals, collateralDecimals, state, ...status, routing, fees, feeSource: fees ? "chain_at_snapshot" : "unknown", feeQuoteRequired: true, feeSemantics, dcnCapabilities, discovery: market.discovery ?? { source: "injected_index", observedAt: null, confirmedThrough: null, coverage: "unknown" } }, ctx.snapshot, warnings);
 }
 export async function accountState(service: ActionContext, ctx: ReadContext, marketId: Hex, account: Address) {
   const market = await service.market(marketId, ctx.signal);

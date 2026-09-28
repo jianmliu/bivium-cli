@@ -6,6 +6,62 @@ import { StrategyFlowService } from '../src/sdk/actions/strategyFlow.ts';
 import { adapterFor } from '../src/sdk/lineage.ts';
 import { routerAbi } from '../src/sdk/strategyRouter.ts';
 const adapter=adapterFor('core-v2'),max=(1n<<256n)-1n;
+test('actual quoted fee drives strategy economics, encoded program and prepare invalidation',async()=>{
+ const f=strategyFixture('short');const read=f.context.rpc.readContract;
+ let extra=0n;f.context.rpc.readContract=async r=>r.functionName==='quoteFee'?[7n+extra,(r.args![1] as bigint)-7n-extra]:read(r);
+ const p=await f.flow.preview(f.input);const source=p.data.source as any;
+ assert.equal(source.economics.fee.raw,'7');
+ const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'ready');
+ extra=-1n;await assert.rejects(f.actions.prepare(p.data.previewId!),/STATE_CHANGED|STALE_PREVIEW/);
+});
+test('missing router swap manager blocks only swapping strategy, not lending or plain fills',async()=>{
+ const f=strategyFixture('short',{POOL_MANAGER:'0x0000000000000000000000000000000000000000'});await assert.rejects(f.flow.preview(f.input),/SWAP_UNAVAILABLE/);
+ const lending=strategyFixture('lendAsset',{POOL_MANAGER:'0x0000000000000000000000000000000000000000'});assert.ok((await lending.flow.preview(lending.input)).data.previewId);
+});
+test('source expiry bounds preview and rejects prepare at the exclusive boundary',async(t)=>{
+ let now=2000_000;t.mock.method(Date,'now',()=>now);
+ const f=strategyFixture();
+ const spot={px:10n**18n,status:'ready' as const,pair:'CAT-USDC',mock:true as const,source:'https://relayer.invalid/mock-refill-spot',observedAt:210,expiresAt:2010};
+ const flow=new StrategyFlowService(f.actions,{spot:async()=>spot});
+ const p=await flow.preview(f.input);
+ assert.equal('binding' in p.data?p.data.binding.expiresAt:undefined,new Date(2010_000).toISOString());
+ assert.deepEqual((p.data.source as any).spot,spot);
+ now=2009_000;assert.equal((await f.actions.prepare(p.data.previewId!)).data.kind,'ready');
+ now=2010_000;await assert.rejects(f.actions.prepare(p.data.previewId!),/STALE_PREVIEW/);
+});
+test('slow prepare cannot return a payload after the source expires',async(t)=>{
+ let now=2000_000;t.mock.method(Date,'now',()=>now);
+ const f=strategyFixture();const flow=new StrategyFlowService(f.actions,{spot:async()=>({px:10n**18n,status:'ready',pair:'CAT-USDC',mock:true,source:'mock',observedAt:210,expiresAt:2010})});
+ const p=await flow.preview(f.input);
+ const read=f.context.rpc.readContract.bind(f.context.rpc);
+ f.context.rpc.readContract=async(r)=>{const result=await read(r);now=2010_000;return result;};
+ await assert.rejects(f.actions.prepare(p.data.previewId!),/STALE_PREVIEW/);
+});
+test('Mock source expiry bounds the router calldata deadline as well as service preparation',async(t)=>{
+ t.mock.method(Date,'now',()=>2000_000);const f=strategyFixture('short');
+ const getBlock=f.context.rpc.getBlock.bind(f.context.rpc);f.context.rpc.getBlock=async args=>({...await getBlock(args),timestamp:2000n});
+ const flow=new StrategyFlowService(f.actions,{spot:async()=>({px:10n**18n,status:'ready',pair:'CAT-USDC',mock:true,source:'mock',observedAt:210,expiresAt:2010})});
+ const p=await flow.preview(f.input);const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'ready');
+ if(ready.data.kind==='ready'){
+  const decoded=decodeFunctionData({abi:routerAbi,data:ready.data.transaction.data});
+  assert.equal(decoded.functionName,'execute');const deadline=(decoded.args as any)[1] as bigint;
+  assert.equal(deadline,2009n);
+  // The pinned router accepts block.timestamp <= deadline, but source expiry is exclusive.
+  assert.equal(2009n<=deadline,true);assert.equal(2010n<=deadline,false);
+ }
+});
+test('already-expired source and source expiring during resolution refuse a preview',async(t)=>{
+ let now=2000_000;t.mock.method(Date,'now',()=>now);const f=strategyFixture();
+ const flow=new StrategyFlowService(f.actions,{spot:async()=>({px:10n**18n,status:'ready',pair:'CAT-USDC',mock:true,source:'mock',observedAt:200,expiresAt:2000})});
+ await assert.rejects(flow.preview(f.input),/STALE/);
+ const slow=new StrategyFlowService(f.actions,{spot:async()=>({px:10n**18n,status:'ready',pair:'CAT-USDC',mock:true,source:'mock',observedAt:210,expiresAt:2010})});
+ const book=f.context.options.book!;f.context.options.book=async(...args)=>{now=2010_000;return book(...args);};
+ await assert.rejects(slow.preview(f.input),/STALE/);
+});
+test('strategy input cannot inject a source feed or observed timestamp',async()=>{
+ const f=strategyFixture();for(const input of [{spot:{px:1n}},{source:'https://evil.invalid'},{observedAt:9999999999},{expiresAt:9999999999}])await assert.rejects(f.flow.preview({...f.input,...input} as any),/Unused strategy field/);
+ assert.equal(f.calls.length,0);
+});
 for(const strategy of ['lendAsset','lendQuote','short','leveredLong'] as const)test(`${strategy} resolves mixed chain decimals and prepares actual unsigned ABI`,async()=>{
  const f=strategyFixture(strategy);const preview=await f.flow.preview(f.input);assert.ok(preview.data.previewId);
  const ready=await f.actions.prepare(preview.data.previewId!);assert.equal(ready.data.kind,'ready');
@@ -18,7 +74,7 @@ test('stale spot and unmatched rung refuse',async()=>{const f=strategyFixture();
 test('spoofed entry metadata cannot lower cost and wallet limit is hard',async()=>{const f=strategyFixture();f.entries[0].price=1n;f.entries[0].size=max;await assert.rejects(f.flow.preview({...f.input,maxInput:'0.000001'}),/MAX_INPUT/);});
 test('approvals are prerequisites and prepare returns no trade',async()=>{const f=strategyFixture('short',{allowance:0n,grantOf:[0n,0n]});const p=await f.flow.preview(f.input);const ready=await f.actions.prepare(p.data.previewId!);assert.equal(ready.data.kind,'prerequisites');assert.ok(f.calls.filter(c=>c.simulation).every(c=>c.functionName!=='execute'));});
 test('gated lender selects gate-approved router and reads only actual lender fee',async()=>{
- const f=strategyFixture('lendAsset',{FEE_BPS:new Error('must not read borrower fee')});
+ const f=strategyFixture('lendAsset',{FEE_BPS:new Error('unused borrower fee')});
  const gate='0x0000000000000000000000000000000000000007' as const;f.market.params.gate=gate;f.offer.gate=gate;f.market.id=adapter.computeMarketId(f.profile,f.market.params);f.entries[0].commitment=adapter.offerCommitment(f.profile,f.offer);
  const p=await f.flow.preview(f.input);const src=(p.data as any).source;assert.equal(src.route.router,f.profile.strategyRouter);assert.ok(BigInt(src.economics.fee.raw)>0n);
  const r=await f.actions.prepare(p.data.previewId!);assert.equal(r.data.kind,'ready');if(r.data.kind==='ready')assert.equal(r.data.transaction.to,f.profile.strategyRouter);

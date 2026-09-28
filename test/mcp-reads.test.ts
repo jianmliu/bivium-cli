@@ -32,7 +32,7 @@ function fixture(fail?: string) {
     getTransactionReceipt: async () => { const e = new Error("not found"); e.name = "TransactionReceiptNotFoundError"; throw e; },
     getTransaction: async () => { const e = new Error("not found"); e.name = "TransactionNotFoundError"; throw e; },
   };
-  return { calls, context: new ActionContext({ profile, rpc, markets: async () => [market] }) };
+  return { calls, context: new ActionContext({ profile: { ...profile }, rpc, markets: async () => [market] }) };
 }
 test("new reads pin every contract read and preserve full v2 identity", async () => {
   const { context, calls } = fixture();
@@ -69,7 +69,7 @@ test("upstream failure is not an empty account and unknown receipt is not revert
 test("MCP reads are available through registry and list cursor is bound to domain/filter", async () => {
   const { context } = fixture();
   const rows = [market, { ...market, params: { ...params, maturity: 3000n }, id: adapter.computeMarketId(profile, { ...params, maturity: 3000n }) }].map((market) => ({ market, loanDecimals: 6, collateralDecimals: 6 }));
-  const mcp = createStrategyMcp({ profile, actionContext: context, overrides: { rows } });
+  const mcp = createStrategyMcp({ profile, actionContext: context, now: () => 1000n, overrides: { rows } });
   const details = await mcp.callTool("market_details", { marketId: market.id }) as any;
   assert.equal(details.data.identity.bivium, profile.core);
   const page = await mcp.callTool("market_list", { limit: 1 }) as any;
@@ -81,6 +81,40 @@ test("MCP reads are available through registry and list cursor is bound to domai
   await assert.rejects(mcp.callTool("market_list", { limit: 1, cursor: page.nextCursor, filters: { maturity: "2000" } }), /cursor/);
   rows.unshift({ ...rows[0], market: { ...market, id: hash } });
   await assert.rejects(mcp.callTool("market_list", { limit: 1, cursor: page.nextCursor }), /cursor/);
+});
+test('product history filters before pagination and binds normalized history mode to eligible collection', async () => {
+  const domain = { ...profile, core: '0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4' as const };
+  const historical = { ...params, loanToken: '0x34a456c0365B78c5E04b97dee228207cf9CaB35D' as const };
+  const rows = [historical, params, { ...params, maturity: 999n }, { ...params, maturity: 3000n }].map(p => ({ market: { ...market, params: p, id: adapter.computeMarketId(domain, p) }, loanDecimals: 6, collateralDecimals: 6 }));
+  let now = 1000n;
+  const mcp = createStrategyMcp({ profile: domain, now: () => now, overrides: { rows } });
+  const page = await mcp.callTool('market_list', { limit: 1 }) as any;
+  assert.equal(page.count, 2);
+  assert.equal(page.markets[0].id, rows[1].market.id);
+  assert.equal(page.markets[0].newBusiness, true);
+  const next = await mcp.callTool('market_list', { limit: 1, includeHistory: false, cursor: page.nextCursor }) as any;
+  assert.equal(next.markets[0].id, rows[3].market.id);
+  await assert.rejects(mcp.callTool('market_list', { includeHistory: true, cursor: page.nextCursor }), /cursor/);
+  const history = await mcp.callTool('market_list', { includeHistory: true }) as any;
+  assert.equal(history.count, 4);
+  assert.equal(history.markets[0].delisted, true);
+  assert.equal(history.markets[2].matured, true);
+  now = 2000n;
+  await assert.rejects(mcp.callTool('market_list', { cursor: page.nextCursor }), /cursor/);
+});
+test('market details and account recovery retain delisted market identities', async () => {
+  const { context } = fixture();
+  context.profile.core = '0x2Ff12244e430BE82a8cdb13ee4FaA31777Bda9e4';
+  const originalRead = context.rpc.readContract;
+  context.rpc.readContract = async r => r.functionName === 'computeId' ? adapter.computeMarketId(context.profile, r.args![0] as MarketParams) : originalRead(r);
+  const p = { ...params, loanToken: '0x34a456c0365B78c5E04b97dee228207cf9CaB35D' as const };
+  const m = { ...market, params: p, id: adapter.computeMarketId(context.profile, p) };
+  context.options.markets = async () => [m];
+  const details = await marketDetails(context, m.id);
+  assert.equal((details.data as any).delisted, true);
+  assert.equal((details.data as any).newBusiness, false);
+  assert.equal((await accountSnapshot(context, address(6), [m.id])).data.markets[0].credit!.raw, '10');
+  context.profile.core = profile.core;
 });
 test("bounded chain discovery rejects an oversized scan before querying logs", async () => {
   const client = { profile, verifyProfile: async () => {}, pub: { getBlockNumber: async () => 100_000n, getLogs: async () => { throw new Error("must not query logs"); } } };

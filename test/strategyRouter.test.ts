@@ -19,6 +19,7 @@ const word = (n: bigint) => n.toString(16).padStart(64, "0");
 const BORROW_FEE = toFunctionSelector("FEE_BPS()");
 const LENDER_FEE = toFunctionSelector("LENDER_FEE_BPS()");
 const QUOTE_BID = toFunctionSelector("quoteLeg(uint256,uint256)");
+const QUOTE_ASK = toFunctionSelector("quoteLenderFee(uint256,uint256)");
 const ROUTERS = toFunctionSelector("routers()");
 const LENDER_ROUTE = toFunctionSelector("LENDER_MUST_ROUTE()");
 const GATE: Address = `0x${"11".repeat(20)}`;
@@ -31,20 +32,37 @@ type ProgramOptions = {
   human?: boolean;
   unwind?: boolean;
   inspectGate?: boolean;
+  command?: string[];
+  maturity?: bigint;
   errors?: Record<string, { code: number; message: string; data?: string }>;
 };
 
 async function program(strategy: string, answers: Record<string, Hex>, buy = false, options: ProgramOptions = {}) {
   const calls: string[] = [];
-  const destinations: { selector: string; to: string | undefined }[] = [];
+  const destinations: { selector: string; to: string | undefined; block?: string }[] = [];
+  const profile: DeploymentProfile = JSON.parse(readFileSync(join(root, "profiles/robinhood-testnet.json"), "utf8"));
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     const rpc = JSON.parse(body);
     const selector = rpc.params?.[0]?.data?.slice(0, 10) ?? rpc.method;
     calls.push(selector);
-    destinations.push({ selector, to: rpc.params?.[0]?.to });
-    const result = answers[selector];
+    destinations.push({ selector, to: rpc.params?.[0]?.to, block: rpc.params?.[1] });
+    let result: unknown = answers[selector];
+    if(result===undefined){
+      if(rpc.method==='eth_chainId')result='0xb626';
+      else if(rpc.method==='eth_getBlockByNumber')result={number:'0xa',hash:`0x${'11'.repeat(32)}`,timestamp:'0x6fffffff',transactions:[]};
+      else if(rpc.method==='eth_getCode')result='0x6000';
+      else if(selector===toFunctionSelector('BIVIUM()'))result=encodeAbiParameters([{type:'address'}],[profile.core]);
+      else if(selector===toFunctionSelector('MAX_LEGS()'))result=`0x${word(16n)}`;
+      else if(selector===toFunctionSelector('decimals()'))result=`0x${word(rpc.params[0].to.toLowerCase()===profile.tokens!.bUSD.address.toLowerCase()?6n:18n)}`;
+      else if(selector===toFunctionSelector('POOL_MANAGER()')||selector===toFunctionSelector('poolManager()'))result=encodeAbiParameters([{type:'address'}],[DEFAULT_ROUTER]);
+      else if(selector===toFunctionSelector('computeId((uint256,address,address,address,uint256,uint256,bool,address))'))result=adapterFor('core-v2').computeMarketId(profile,{loanToken:`0x${'00'.repeat(20)}`,collateralToken:`0x${'00'.repeat(20)}`,maturity:1n,strike:1n,allowPartialRepay:false,gate:`0x${'00'.repeat(20)}`});
+      else if(selector===QUOTE_ASK&&answers[LENDER_FEE]){
+        const data=rpc.params[0].data as string,units=BigInt(`0x${data.slice(10,74)}`),cost=BigInt(`0x${data.slice(74,138)}`),fee=(units>cost?units-cost:0n)*BigInt(answers[LENDER_FEE])/10000n;
+        result=encodeAbiParameters([{type:'uint256'},{type:'uint256'}],[fee,cost+fee]);
+      }
+    }
     const error = options.errors?.[selector];
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(error || result === undefined
@@ -56,12 +74,12 @@ async function program(strategy: string, answers: Record<string, Hex>, buy = fal
   assert.ok(address && typeof address !== "string");
   const dir = mkdtempSync(join(tmpdir(), "bivium-router-fee-"));
   try {
-    const profile: DeploymentProfile = JSON.parse(readFileSync(join(root, "profiles/robinhood-testnet.json"), "utf8"));
     profile.rpcUrl = `http://127.0.0.1:${address.port}`;
+    if (options.command) delete profile.relayerUrl;
     if (options.defaultRouter) profile.strategyRouter = options.defaultRouter;
     const offer: Offer = {
       loanToken: profile.tokens!.bUSD.address, collateralToken: profile.tokens!.mNVDA.address,
-      maturity: 2_000_000_000n, strike: 125n * 10n ** 24n, allowPartialRepay: false,
+      maturity: options.maturity ?? 2_000_000_000n, strike: 125n * 10n ** 24n, allowPartialRepay: false,
       gate: options.gate ?? "0x0000000000000000000000000000000000000000", maker: profile.core,
       buy, tick: 4000n, maxUnits: 10n ** 30n, maxAssets: 0n, start: 0n, expiry: 2_000_000_000n,
       group: `0x${"11".repeat(32)}`, ratifier: profile.signatureRatifier,
@@ -72,7 +90,7 @@ async function program(strategy: string, answers: Record<string, Hex>, buy = fal
     writeFileSync(offerFile, JSON.stringify(buildSignedOfferFile(profile, offer, commitment, "0x")));
     writeFileSync(profileFile, JSON.stringify(profile));
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "src/cli/main.ts", "strategy", "program",
+      const child = spawn(process.execPath, ["--import", "tsx", "src/cli/main.ts", ...(options.command??["strategy", "program"]),
         "--strategy", strategy, "--offer", offerFile, "--units", "2.000001", "--min-out", "0.001",
         "--profile", profileFile, ...(options.human ? [] : ["--json"]),
         ...(options.explicitRouter ? ["--router", options.explicitRouter] : []),
@@ -109,7 +127,24 @@ test("strategy program approves the full ask cost plus the independently read le
   assert.equal(body.derived.fee, fee.toString());
   assert.equal(body.derived.costWithFee, (cost + fee).toString());
   assert.equal(body.approvals[0].amount, (cost + fee).toString());
-  assert.deepEqual(result.calls, [LENDER_FEE], "an ask does not need the borrow-side fee getter");
+  assert.ok(result.calls.includes(LENDER_FEE));
+  assert.ok(!result.calls.includes(BORROW_FEE), "an ask does not need the borrow-side fee getter");
+});
+
+test('CLI opening program uses authoritative exact fee and all admission reads are pinned',async()=>{
+ const base=await program('lendQuote',{[LENDER_FEE]:`0x${word(1000n)}`});assert.equal(base.code,0,base.stderr);
+ const cost=fillCost(base.offer,2000001n),result=await program('lendQuote',{[LENDER_FEE]:`0x${word(1000n)}`,[QUOTE_ASK]:encodeAbiParameters([{type:'uint256'},{type:'uint256'}],[7n,cost+7n])});
+ assert.equal(result.code,0,result.stderr);assert.equal(JSON.parse(result.stdout).derived.fee,'7');
+ assert.ok(result.destinations.filter(c=>c.selector==='eth_getCode'||c.selector.startsWith('0x')).every(c=>c.block==='0xa'));
+});
+test('legacy gated trade and borrow commands stop before signer access or writes',async()=>{
+ for(const command of [['borrow','quote'],['borrow','execute'],['trade','buy'],['trade','sell']]){
+  const r=await program('protectivePut',{},true,{gate:GATE,command});assert.notEqual(r.code,0);assert.match(r.stderr,/unsupported.*gated|gated.*unsupported/i);assert.match(r.stderr,/action_preview|strategy program/);assert.doesNotMatch(r.stderr,/signing key required/);assert.equal(r.calls.length,0);
+ }
+});
+test('legacy gated mature secondary sell retains recovery path after pinned maturity check',async()=>{
+ const r=await program('protectivePut',{},true,{gate:GATE,command:['trade','sell'],maturity:100n});
+ assert.match(r.stderr,/pick a book source/);assert.doesNotMatch(r.stderr,/gated.*unsupported/i);assert.ok(r.calls.includes('eth_getBlockByNumber'));
 });
 
 test("an older router without LENDER_FEE_BPS refuses to quote and explains how to proceed", async () => {
@@ -188,7 +223,7 @@ test("an explicitly rejected router is not silently replaced", async () => {
   const result = await program("lendQuote", gatedAnswers(), false, { gate: GATE, defaultRouter: DEFAULT_ROUTER, explicitRouter: DEFAULT_ROUTER });
   assert.notEqual(result.code, 0);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /--router.*not admitted/i);
+  assert.match(result.stderr, /router.*not admitted/i);
   assert.ok(!result.calls.includes(LENDER_FEE));
 });
 

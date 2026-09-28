@@ -57,7 +57,7 @@ export class ActionService {
     const report = assessRisk({ market: marketId, collateralKind, evidence }, policy);
     return result({ report, policyId, policyHash: canonicalHash(policy), evidenceHash: canonicalHash({ marketId, collateralKind, evidence }) }, null);
   }
-  async preview(input: ActionIntent, signal?: AbortSignal, resolved?: { ctx: ReadContext; source: unknown }) {
+  async preview(input: ActionIntent, signal?: AbortSignal, resolved?: { ctx: ReadContext; source: unknown; sourceExpiresAt?: number }) {
     const source = resolved ? structuredClone(resolved.source) : undefined;
     if (!isAddress(input.account) || !isAddress(input.receiver)) throw new ActionError("INVALID_ARGUMENT", "Account and receiver must have valid address checksums");
     if (["fund", "repay", "withdraw_liquidity", "withdraw_collateral", "claim", "escrow_collateral", "withdraw_collateral_escrow"].includes(input.action)) {
@@ -70,7 +70,7 @@ export class ActionService {
     const ttl = intent.ttlSeconds ?? 60;
     if (!Number.isInteger(ttl) || ttl < 1 || ttl > 60) throw new ActionError("INVALID_ARGUMENT", "Preview TTL must be 1–60 seconds");
     const observed = resolved ? Date.parse(resolved.ctx.snapshot.observedAt) : this.context.now();
-    const expires = Math.min(this.context.now(), observed) + ttl * 1000;
+    const expires = Math.min(Math.min(this.context.now(), observed) + ttl * 1000, resolved?.sourceExpiresAt === undefined ? Infinity : resolved.sourceExpiresAt * 1000);
     if (!Number.isFinite(expires) || expires <= this.context.now()) throw new ActionError("STALE_PREVIEW", "Resolution snapshot expired; repeat strategy_preview");
     if (resolved && (resolved.ctx.account.toLowerCase() !== intent.account.toLowerCase() || resolved.ctx.chainId !== this.context.profile.chainId || resolved.ctx.core.toLowerCase() !== this.context.profile.core.toLowerCase())) throw new ActionError("DOMAIN_MISMATCH", "Resolved snapshot differs from action account/deployment");
     const assessment = await this.risk(intent.marketId, intent.collateralKind, intent.evidence, intent.policyId, signal);

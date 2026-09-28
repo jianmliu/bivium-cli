@@ -1,4 +1,5 @@
 import { getAddress, isAddress } from 'viem';
+import { productMarketStatus } from '../productMarketPolicy.ts';
 import { type Address, type MarketParams, ZERO_ADDRESS } from '../types.ts';
 import { type SpotRef, spotPxFor } from '../strategies/gather.ts';
 import { getStrategy } from '../strategies/catalog.ts';
@@ -7,9 +8,9 @@ import { resolveStrategy } from '../strategies/resolve.ts';
 import { quoteStrategy } from '../strategies/quote.ts';
 import type { MarketRiskInput, PoolRow } from '../strategies/types.ts';
 import { collateralForDebt, debtForCollateral } from '../math.ts';
-import { originationFee, type PoolKey } from '../strategies/program.ts';
+import { type PoolKey } from '../strategies/program.ts';
 import { swapFloor, readSqrtPriceX96, outAtPoolPrice, type SwapFloor } from '../strategies/pools.ts';
-import { gateAbi, routerAbi } from '../strategyRouter.ts';
+import { resolveRouteAdmission, quoteRouteFill, assertRouteSwapCapability } from './routeAdmission.ts';
 import { entryFromSignedOffer, fillCost, offerActiveAt, sortSide, validateGroups, planSweepByFace, makerBackingKey, type BookEntry, type MakerBacking } from '../orderbook.ts';
 import { fetchRelayerBook } from '../relayer.ts';
 import { MAX_TICK, TICK_SPACING } from '../tick.ts';
@@ -66,6 +67,7 @@ export class StrategyFlowService {
   const decimals=new Map<string,Promise<number>>();const dec=(address:Address)=>{const key=address.toLowerCase();let value=decimals.get(key);if(!value){value=tokenDecimals(context,ctx,address);decimals.set(key,value);}return value;};
   const rows:PoolRow[]=[];
   for(const market of discovered){
+   if(!productMarketStatus(profile,market.params,ctx.timestamp).newBusiness)continue;
    const p=market.params,loanSymbol=symbols.get(p.loanToken.toLowerCase()),collateralSymbol=symbols.get(p.collateralToken.toLowerCase());
    if(!loanSymbol||!collateralSymbol||p.maturity!==BigInt(input.maturity)||p.maturity<=ctx.timestamp||classifyLine(loanSymbol,collateralSymbol)!==strategy.line||!same(strategy.line==='credit'?p.collateralToken:p.loanToken,token[1].address))continue;
    uint(p.strike,'strike',true);rows.push({market,loanSymbol,collateralSymbol,loanDecimals:await dec(p.loanToken),collateralDecimals:await dec(p.collateralToken)});
@@ -73,8 +75,11 @@ export class StrategyFlowService {
   if(!rows.length)throw new ActionError('MARKET_NOT_FOUND','No live canonical market for the requested asset and maturity');
   // A spot reference is pair-specific. Do not apply a quote for one numeraire to another.
   const pairs=new Set(rows.map(r=>`${r.loanSymbol}:${r.collateralSymbol}`));if(pairs.size!==1)throw new ActionError('MARKET_SELECTION_REQUIRED','Multiple quote-token pairs require an explicit supported market family');
-  const probe=rows[0],spot=await (this.options.spot??spotPxFor)(profile.relayerUrl,strategy.line,probe.loanSymbol,probe.collateralSymbol,ctx);
+  const probe=rows[0],spot=await (this.options.spot
+   ?this.options.spot(profile.relayerUrl,strategy.line,probe.loanSymbol,probe.collateralSymbol,ctx)
+   :spotPxFor(profile,strategy.line,probe.loanSymbol,probe.collateralSymbol,probe.market.params));
   signal?.throwIfAborted();if(spot.status!=='ready'||spot.px<=0n)throw new ActionError('STALE_SPOT','Fresh positive spot is required');
+  if(spot.expiresAt!==undefined&&(!Number.isSafeInteger(spot.expiresAt)||spot.expiresAt*1000<=context.now()))throw new ActionError('STALE_SPOT','Spot source expired; repeat strategy_preview');
   const sizeDecimals=input.strategy==='leveredLong'?probe.collateralDecimals:probe.loanDecimals;
   const size=decimal(input.size,sizeDecimals,'size',true);
   const resolution=resolveStrategy({strategyId:input.strategy,asset:token[1].address,size,maturity:BigInt(input.maturity),bufferPct:input.bufferPct},rows,spot.px);
@@ -82,15 +87,8 @@ export class StrategyFlowService {
   const market=resolution.row.market,p=market.params,lending=strategy.side==='lend';
   const units=uint(input.strategy==='leveredLong'?debtForCollateral(size,p.strike):size,'face',true);
   const maxInput=decimal(input.maxInput,lending?resolution.row.loanDecimals:resolution.row.collateralDecimals,'maxInput');
-  let router:Address|undefined,lenderMustRoute=false;
-  if(!same(p.gate,ZERO_ADDRESS)){
-   const [routers,must]=await Promise.all([context.read<Address[]>(ctx,p.gate,gateAbi,'routers'),context.read<boolean>(ctx,p.gate,gateAbi,'LENDER_MUST_ROUTE')]);
-   if(!Array.isArray(routers)||routers.length>100||routers.some(r=>!isAddress(r)||same(r,ZERO_ADDRESS))||typeof must!=='boolean')throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid gate routing');
-   lenderMustRoute=must;if(!lending||must)router=routers.find(r=>same(r,profile.strategyRouter??ZERO_ADDRESS))??routers[0];
-  }else if(!lending)router=profile.strategyRouter;
-  if((!lending||lenderMustRoute)&&!router)throw new ActionError('UNSUPPORTED_ACTION','No approved strategy router');
-  let feeBps=0n;
-  if(router){const core=await context.read<Address>(ctx,router,routerAbi,'BIVIUM');if(!isAddress(core)||!same(core,profile.core))throw new ActionError('DOMAIN_MISMATCH','Router points to another Core');feeBps=await context.read<bigint>(ctx,router,routerAbi,lending?'LENDER_FEE_BPS':'FEE_BPS');if(typeof feeBps!=='bigint'||feeBps<0n||feeBps>10000n)throw new ActionError('UPSTREAM_UNAVAILABLE','Invalid router fee');}
+  const route=await resolveRouteAdmission(context,ctx,p,{side:lending?'buy':'borrow'});
+  const {router,lenderMustRoute}=route,feeBps=lending?route.lenderFeeBps:route.feeBps;
   const entries=await this.book(p,ctx);
   const backing=new Map<string,MakerBacking>();
   for(const e of entries){e.consumed=await context.core<bigint>(ctx,'consumed',[e.offer.maker,e.offer.group]);}
@@ -115,11 +113,12 @@ export class StrategyFlowService {
    selected=e;cost=uint(fillCost(e.offer,units,e.price),'cost',true);break;
   }
   if(!selected)throw new ActionError('INSUFFICIENT_LIQUIDITY','No single live order can fill the complete requested size; reduce size or use the separate order workflow');
-  const fee=uint(lending?(units>cost?(units-cost)*feeBps/10000n:0n):originationFee(units,cost,feeBps),'fee');
+  const {fee}=await quoteRouteFill(context,ctx,route,lending?'buy':'borrow',units,cost);
   const principal=lending?0n:uint(cost-fee,'principal',true),paid=uint(cost+fee,'loanPaid'),collateral=uint(collateralForDebt(units,p.strike),'collateral');
   if(lending&&paid>maxInput)throw new ActionError('MAX_INPUT_EXCEEDED','Loan cost including fees exceeds maxInput');
   let swap: (SwapFloor & {poolKey:PoolKey;amountIn:ReturnType<typeof amount>})|undefined,topUp=0n;
   if(!lending){
+   await assertRouteSwapCapability(context,ctx,route,{useQuoter:!!profile.v4Quoter});
    if(!ctx.rpc.call||!profile.v4StateView)throw new ActionError('SWAP_UNAVAILABLE','Pinned StateView price and depth/quoter are required');
    const call=async(to:Address,data:`0x${string}`)=>(await context.limited(()=>ctx.rpc.call!({to,data,blockNumber:ctx.blockNumber}),signal)).data??'0x';
    const pools=this.options.pools??[{fee:3000,tickSpacing:60,hooks:ZERO_ADDRESS}];if(!pools.length||pools.length>8)throw new ActionError('SWAP_UNAVAILABLE','Host pool candidate count must be 1–8');
@@ -139,9 +138,13 @@ export class StrategyFlowService {
    if(!swap)throw new ActionError('SWAP_UNAVAILABLE','No validated depth-aware pool within maxPriceImpactBps');
    topUp=collateral>swap.minOut?collateral-swap.minOut:0n;if(topUp>maxInput)throw new ActionError('MAX_INPUT_EXCEEDED','Required collateral top-up exceeds maxInput');
   }
-  const intent:ActionIntent={action:router?'strategy_program':'buy_dcn',marketId:market.id,account:getAddress(input.account),receiver:getAddress(input.account),policyId:input.policyId,collateralKind:input.collateralKind,evidence:input.evidence,ttlSeconds:input.ttlSeconds,deadline:String(ctx.timestamp+BigInt(input.ttlSeconds??60)),fills:[{offer:selected.offer,commitment:selected.commitment,ratifierData:selected.signature,units:String(units)}],...(router?{router,strategyId:input.strategy}:{}),...(lending?{maxCost:String(maxInput)}:{minProceeds:String(principal),maxTopUp:String(topUp),poolKey:swap!.poolKey,minOut:String(swap!.minOut)})};
+  const requestedDeadline=ctx.timestamp+BigInt(input.ttlSeconds??60);
+  // Router deadlines are inclusive; the source's expiry is the first invalid second.
+  const sourceDeadline=spot.expiresAt===undefined?requestedDeadline:BigInt(spot.expiresAt)-1n;
+  const deadline=sourceDeadline<requestedDeadline?sourceDeadline:requestedDeadline;
+  const intent:ActionIntent={action:router?'strategy_program':'buy_dcn',marketId:market.id,account:getAddress(input.account),receiver:getAddress(input.account),policyId:input.policyId,collateralKind:input.collateralKind,evidence:input.evidence,ttlSeconds:input.ttlSeconds,deadline:String(deadline),fills:[{offer:selected.offer,commitment:selected.commitment,ratifierData:selected.signature,units:String(units)}],...(router?{router,strategyId:input.strategy}:{}),...(lending?{maxCost:String(maxInput)}:{minProceeds:String(principal),maxTopUp:String(topUp),poolKey:swap!.poolKey,minOut:String(swap!.minOut)})};
   const source={requested,market,selectedOrder:{commitment:selected.commitment,ratifier:selected.offer.ratifier,maker:selected.offer.maker,units:String(units)},spot,realizedBufferPct:resolution.realizedBufferPct,route:{router:router??null,lenderMustRoute,feeBps:String(feeBps)},economics:{face:amount(units,resolution.row.loanDecimals,p.loanToken),cost:amount(cost,resolution.row.loanDecimals,p.loanToken),fee:amount(fee,resolution.row.loanDecimals,p.loanToken),...(lending?{loanPaid:amount(paid,resolution.row.loanDecimals,p.loanToken)}:{principal:amount(principal,resolution.row.loanDecimals,p.loanToken),collateral:amount(collateral,resolution.row.collateralDecimals,p.collateralToken),topUp:amount(topUp,resolution.row.collateralDecimals,p.collateralToken)}),maxInput:amount(maxInput,lending?resolution.row.loanDecimals:resolution.row.collateralDecimals,lending?p.loanToken:p.collateralToken)},swap:swap?{...swap,minOut:amount(swap.minOut,resolution.row.collateralDecimals,p.collateralToken),estimate:amount(swap.estimate,resolution.row.collateralDecimals,p.collateralToken)}:null,indicativePayoff:{feeAdjusted:false,executionGuarantee:false,description:'Indicative spot-based payoff; excludes router fees and actual swap execution effects.',quote:quoteStrategy({resolution,priceWad:selected.price,spot:spot.px,now:ctx.timestamp,sigmaAnnual:spot.sigmaAnnual,marketId:market.id},size)}};
-  return this.actions.preview(intent,signal,{ctx,source});
+  return this.actions.preview(intent,signal,{ctx,source,sourceExpiresAt:spot.expiresAt});
  }
  private async book(params:MarketParams,ctx:ReadContext):Promise<BookEntry[]> {
   const context=this.actions.context,profile=context.profile;let entries:BookEntry[];

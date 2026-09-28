@@ -9,6 +9,7 @@
 import type { Readable, Writable } from "node:stream";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
+import { productMarketStatus } from '../sdk/productMarketPolicy.ts';
 import { ActionError } from "../sdk/actions/types.ts";
 import { ActionContext } from "../sdk/actions/context.ts";
 import { createReadTools, READ_TOOL_SPECS } from "./tools/reads.ts";
@@ -108,7 +109,7 @@ export const LEGACY_TOOLS: ToolDef[] = [
   {
     name: "market_list",
     description: "Discovered markets with pair, product line, human strike (numeraire per asset), maturity — pick a maturity here before quoting. Join existing markets; never invent one.",
-    inputSchema: { type: "object", properties: { source: viewProps.source, fromBlock: viewProps.fromBlock, chunkBlocks: viewProps.chunkBlocks, limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", maxLength: 1024 }, filters: { type: "object", additionalProperties: false, properties: { maturity: integerStringSchema, loanToken: addressSchema, collateralToken: addressSchema, gate: addressSchema, allowPartialRepay: { type: "boolean" } } } }, additionalProperties: false },
+    inputSchema: { type: "object", properties: { includeHistory: { type: 'boolean', default: false }, source: viewProps.source, fromBlock: viewProps.fromBlock, chunkBlocks: viewProps.chunkBlocks, limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", maxLength: 1024 }, filters: { type: "object", additionalProperties: false, properties: { maturity: integerStringSchema, loanToken: addressSchema, collateralToken: addressSchema, gate: addressSchema, allowPartialRepay: { type: "boolean" } } } }, additionalProperties: false },
   },
   {
     name: "strategy_quote",
@@ -194,8 +195,11 @@ export function createStrategyMcp(deps: McpDeps) {
       case "market_list": {
         const rows = deps.overrides?.rows ?? (await poolRowsFor(profile, deps.client, await loadDiscoveredMarkets(profile, deps.client, { source: str(args.source) as "relayer" | "chain" | undefined, fromBlock: big(args.fromBlock, "fromBlock"), chunkSize: big(args.chunkBlocks, "chunkBlocks"), maxScanBlocks: 18_000n })));
         const filters = (args.filters ?? {}) as Record<string, unknown>;
-        const collection = createHash("sha256").update(JSON.stringify(rows.map((row) => row.market.id.toLowerCase()))).digest("hex");
-        const binding = createHash("sha256").update(JSON.stringify([profile.chainId, profile.core.toLowerCase(), profile.abiProfile, args.source ?? null, args.fromBlock ?? null, args.chunkBlocks ?? null, ...["maturity", "loanToken", "collateralToken", "gate", "allowPartialRepay"].map((key) => typeof filters[key] === "string" ? String(filters[key]).toLowerCase() : filters[key] ?? null)])).digest("hex");
+        const now = deps.now?.() ?? BigInt(Math.floor(Date.now() / 1000));
+        const includeHistory = args.includeHistory === true;
+        const filtered = rows.filter(row => (includeHistory || productMarketStatus(profile, row.market.params, now).newBusiness) && Object.entries(filters).every(([key, value]) => String(row.market.params[key as keyof typeof row.market.params]).toLowerCase() === String(value).toLowerCase()));
+        const collection = createHash("sha256").update(JSON.stringify(filtered.map((row) => row.market.id.toLowerCase()))).digest("hex");
+        const binding = createHash("sha256").update(JSON.stringify([profile.chainId, profile.core.toLowerCase(), profile.abiProfile, includeHistory, args.source ?? null, args.fromBlock ?? null, args.chunkBlocks ?? null, ...["maturity", "loanToken", "collateralToken", "gate", "allowPartialRepay"].map((key) => typeof filters[key] === "string" ? String(filters[key]).toLowerCase() : filters[key] ?? null)])).digest("hex");
         let offset = 0;
         if (args.cursor) {
           try {
@@ -204,7 +208,6 @@ export function createStrategyMcp(deps: McpDeps) {
             offset = decoded.offset;
           } catch { throw new ActionError("INVALID_ARGUMENT", "Invalid cursor for deployment/filter"); }
         }
-        const filtered = rows.filter((row) => Object.entries(filters).every(([key, value]) => String(row.market.params[key as keyof typeof row.market.params]).toLowerCase() === String(value).toLowerCase()));
         const limit = (args.limit as number | undefined) ?? 20;
         const page = filtered.slice(offset, offset + limit);
         return {
@@ -216,6 +219,7 @@ export function createStrategyMcp(deps: McpDeps) {
             const line = classifyLine(r.loanSymbol, r.collateralSymbol);
             return {
               id: r.market.id,
+              ...productMarketStatus(profile, r.market.params, now),
               chainId: profile.chainId,
               bivium: profile.core,
               allowPartialRepay: r.market.params.allowPartialRepay,
@@ -239,6 +243,7 @@ export function createStrategyMcp(deps: McpDeps) {
         const g = await gatherStrategyInputs(profile, deps.client, gatherRequestFrom(args, deps));
         const router = str(args.router);
         const plan = planFromGathered(profile, g, {
+          now: deps.now?.(),
           router: router as `0x${string}` | undefined,
           minOut: str(args.minOut),
           ttlSeconds: big(args.ttlSeconds, "ttlSeconds"),

@@ -63,6 +63,18 @@ function view(strategyId: string, params: MarketParams): ProgramView {
 
 const POOL = poolKeyFor(MNVDA, BUSD, 3000, 60, ZERO);
 
+test('live exact fee overrides offline BPS and validates borrow and lender uint256 bounds', () => {
+  for (const buy of [true,false]) {
+    const strategy = buy ? 'protectivePut' : 'lendQuote';
+    const build = buildOpenProgram(view(strategy, PUT), { domain: DOMAIN, offer: offerOn(PUT,buy), units:1000n, feeBps:1000n, lenderFeeBps:1000n, exactFee:7n });
+    assert.equal(build.derived.fee,7n);
+    assert.equal(buy?build.derived.principal:build.derived.costWithFee,buy?build.derived.cost-7n:build.derived.cost+7n);
+    for(const exactFee of [-1n,1n<<256n]) assert.throws(()=>buildOpenProgram(view(strategy,PUT),{domain:DOMAIN,offer:offerOn(PUT,buy),units:1000n,exactFee}),/fee|uint256/i);
+  }
+  assert.throws(()=>buildOpenProgram(view('protectivePut',PUT),{domain:DOMAIN,offer:offerOn(PUT,true),units:1000n,exactFee:1001n}),/fee/i);
+  assert.throws(()=>buildOpenProgram(view('lendQuote',PUT),{domain:DOMAIN,offer:offerOn(PUT,false),units:1000n,exactFee:(1n<<256n)-1n}),/uint256/i);
+});
+
 const LEG_TUPLE = [{
   type: "tuple",
   components: [{ name: "kind", type: "uint8" }, { name: "data", type: "bytes" }],

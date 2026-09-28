@@ -16,9 +16,25 @@ test('preflight rejects forged commitment and shared cap overfills',async()=>{co
 test('sell cannot silently create debt; unknown ratifier fails closed',async()=>{await assert.rejects(validateTradePlan(plan({...o,buy:true}),env({creditOf:0n})),/debt/);await assert.rejects(validateTradePlan(plan({...o,ratifier:a(9)}),env()),/ratifier/i);});
 import { evaluateAction } from '../src/sdk/actions/prepare.ts';
 import { ActionContext } from '../src/sdk/actions/context.ts';
-import { decodeFunctionData } from 'viem';
+import { decodeFunctionData, decodeAbiParameters, parseAbiParameters } from 'viem';
+import { erc20Abi } from '../src/sdk/abi.ts';
+import { routerAbi } from '../src/sdk/strategyRouter.ts';
 import type { ActionIntent } from '../src/sdk/actions/preview.ts';
-function fixture(extra:Record<string,unknown>={}) {const p=plan();const calls:any[]=[];const marketId=adapter.computeMarketId(profile,o);const rpc:any={getChainId:async()=>46630,getBlock:async()=>({number:10n,hash:`0x${'11'.repeat(32)}`,timestamp:100n}),readContract:async(r:any)=>{calls.push(r);if(r.functionName==='computeId')return adapter.computeMarketId(profile,{loanToken:a(0),collateralToken:a(0),maturity:1n,strike:1n,allowPartialRepay:false,gate:a(0)}); if(Object.hasOwn(extra,r.functionName)){if(extra[r.functionName] instanceof Error)throw extra[r.functionName];return extra[r.functionName];}return ({decimals:18,isRatifier:true,isRatified:RATIFIED,creditOf:1000n,consumed:0n,collateralEscrowOf:0n,liquidityOf:1000n,balanceOf:1000n,allowance:1000n} as any)[r.functionName];},simulateContract:async(r:any)=>{calls.push({...r,simulation:true});return {};}};const context=new ActionContext({profile,rpc,markets:async()=>[{id:marketId,params:o}] as any});const intent:ActionIntent={action:'buy_dcn',marketId,account:a(6),receiver:a(6),policyId:'test',collateralKind:'other',evidence:{} as any,fills:[{offer:o,commitment:p.takes[0].entry.commitment,ratifierData:'0x',units:'20'}],maxCost:'20',deadline:'200'};return{context,intent,calls};}
+function fixture(extra:Record<string,unknown>={}) {
+ const p=plan(),calls:any[]=[],marketId=adapter.computeMarketId(profile,o);
+ const rpc:any={getChainId:async()=>46630,getBlock:async()=>({number:10n,hash:`0x${'11'.repeat(32)}`,timestamp:100n}),getBytecode:async(r:any)=>{calls.push({...r,functionName:'code'});return '0x6000';},readContract:async(r:any)=>{
+  calls.push(r);if(r.functionName==='computeId')return adapter.computeMarketId(profile,{loanToken:a(0),collateralToken:a(0),maturity:1n,strike:1n,allowPartialRepay:false,gate:a(0)});
+  if(Object.hasOwn(extra,r.functionName)){if(extra[r.functionName] instanceof Error)throw extra[r.functionName];return extra[r.functionName];}
+  if(['quoteFee','quoteLeg','quoteLenderFee'].includes(r.functionName)){
+   const [units,cost]=r.args as [bigint,bigint],ask=r.functionName==='quoteLenderFee',bps=extra[ask?'LENDER_FEE_BPS':'FEE_BPS']??0n,premium=units>cost?units-cost:0n;
+   const raw=premium*(bps as bigint)/10000n,fee=!ask&&raw>cost?cost:raw;return [fee,ask?cost+fee:cost-fee];
+  }
+  return ({decimals:18,BIVIUM:profile.core,MAX_LEGS:16n,FEE_BPS:0n,LENDER_FEE_BPS:0n,isRatifier:true,isRatified:RATIFIED,creditOf:1000n,consumed:0n,collateralEscrowOf:0n,liquidityOf:1000n,balanceOf:1000n,allowance:1000n} as any)[r.functionName];
+ },simulateContract:async(r:any)=>{calls.push({...r,simulation:true});return {};}};
+ const context=new ActionContext({profile,rpc,markets:async()=>[{id:marketId,params:o}] as any});
+ const intent:ActionIntent={action:'buy_dcn',marketId,account:a(6),receiver:a(6),policyId:'test',collateralKind:'other',evidence:{} as any,fills:[{offer:o,commitment:p.takes[0].entry.commitment,ratifierData:'0x',units:'20'}],maxCost:'20',deadline:'200'};
+ return{context,intent,calls};
+}
 test('unsigned direct buy encodes atomic fills and pins public simulation',async()=>{const f=fixture();const ctx=await f.context.pin(f.intent.account);const r=await evaluateAction(f.context,f.intent,ctx);const decoded=decodeFunctionData({abi:adapter.coreAbi,data:r.transaction.data});assert.equal(decoded.functionName,'multicall');assert.equal(r.simulation,'success');assert.ok(f.calls.filter(x=>x.simulation).every(x=>x.account===f.intent.account&&x.blockNumber===10n));});
 test('trade rejects missed deadline and insufficient explicit price bound',async()=>{const f=fixture();const ctx=await f.context.pin(f.intent.account);await assert.rejects(evaluateAction(f.context,{...f.intent,deadline:'99'},ctx),/deadline/i);await assert.rejects(evaluateAction(f.context,{...f.intent,maxCost:'0'},ctx),/cost/i);});
 test('gated lender routes through verified Core and includes lender fee, without defaulting failed reads',async()=>{const f=fixture({routers:[a(8)],LENDER_MUST_ROUTE:true,BIVIUM:profile.core,MAX_LEGS:16n,LENDER_FEE_BPS:1000n});const offer={...o,gate:a(7)};f.intent.marketId=adapter.computeMarketId(profile,offer);f.context.options.markets=async()=>[{id:f.intent.marketId,params:offer}] as any;f.intent.fills=[{offer,commitment:adapter.offerCommitment(profile,offer),ratifierData:'0x',units:'20'}];const ctx=await f.context.pin(f.intent.account);const r=await evaluateAction(f.context,f.intent,ctx);assert.equal(r.transaction.to,a(8));const rat=f.calls.find(x=>x.functionName==='isRatified');assert.equal(rat.args[1],a(8));const broken=fixture({LENDER_FEE_BPS:new Error('RPC down'),BIVIUM:profile.core,MAX_LEGS:16n});broken.intent.router=a(8);await assert.rejects(evaluateAction(broken.context,broken.intent,await broken.context.pin(broken.intent.account)),/RPC down/);});
@@ -36,5 +52,29 @@ test('ungated arbitrary router cannot obtain approval by self-reporting expected
  const f=fixture({BIVIUM:profile.core,MAX_LEGS:16n,LENDER_FEE_BPS:0n,allowance:0n});
  f.intent.router=a(9);
  await assert.rejects(evaluateAction(f.context,f.intent,await f.context.pin(f.intent.account)),/trusted|configured/i);
+ assert.equal(f.calls.some(c=>c.simulation),false);
+});
+test('routed buy sums independently rounded exact quotes into encoded maxCost and exact approval',async()=>{
+ const f=fixture({quoteLenderFee:[9n,10n],allowance:0n});const offer={...o,tick:0n};
+ f.intent={...f.intent,router:a(8),maxCost:'20',fills:[1,2].map(i=>{const o={...offer,expiry:900n-BigInt(i)};return {offer:o,commitment:adapter.offerCommitment(profile,o),ratifierData:'0x',units:'100'};})};
+ const r=await evaluateAction(f.context,f.intent,await f.context.pin(f.intent.account));
+ assert.equal((r.after as any).loanPaid,20n);
+ assert.equal(f.calls.filter(c=>c.functionName==='quoteLenderFee').length,2);
+ assert.deepEqual(decodeFunctionData({abi:erc20Abi,data:r.prerequisites[0].data}).args,[a(8),20n]);
+ const decoded=decodeFunctionData({abi:routerAbi,data:r.transaction.data});
+ const payload=parseAbiParameters(['struct Offer { uint256 chainId; address bivium; address loanToken; address collateralToken; uint256 maturity; uint256 strike; bool allowPartialRepay; address gate; address maker; bool buy; uint256 tick; uint256 maxUnits; uint256 maxAssets; uint256 start; uint256 expiry; bytes32 group; address ratifier; }','struct FillAsk { Offer ask; bytes ratifierData; uint256 units; uint256 maxCost; }','FillAsk']);
+ for(const leg of decoded.args![0] as any[])assert.equal(decodeAbiParameters(payload,leg.data)[0].maxCost,10n);
+ const rat=f.calls.find(c=>c.functionName==='isRatified');assert.equal(rat.args[1],a(8));
+ await assert.rejects(evaluateAction(f.context,{...f.intent,maxCost:'19'},await f.context.pin(f.intent.account)),/maxCost/);
+});
+test('plain borrowing honors exact net minProceeds without requiring swap capability',async()=>{
+ const f=fixture({quoteFee:[7n,12n],creditOf:0n,grantOf:[4n,300n],position:{debt:0n,collateral:0n,collateralWithdrawable:0n}});const offer={...o,buy:true};
+ f.intent={...f.intent,action:'borrow',maxCost:undefined,minProceeds:'12',maxTopUp:'20',fills:[{offer,commitment:adapter.offerCommitment(profile,offer),ratifierData:'0x',units:'20'}]};
+ const r=await evaluateAction(f.context,f.intent,await f.context.pin(f.intent.account));assert.equal((r.after as any).principalAfterFee,12n);assert.equal(f.calls.some(c=>c.functionName==='POOL_MANAGER'),false);
+ await assert.rejects(evaluateAction(f.context,{...f.intent,minProceeds:'13'},await f.context.pin(f.intent.account)),/minProceeds/);
+});
+test('pre-maturity secondary sell remains refused with ample credit and zero wallet collateral bound',async()=>{
+ const f=fixture({creditOf:1000n});const offer={...o,buy:true};
+ await assert.rejects(evaluateAction(f.context,{...f.intent,action:'sell_dcn',maxCost:undefined,minProceeds:'0',maxTopUp:'0',fills:[{offer,commitment:adapter.offerCommitment(profile,offer),ratifierData:'0x',units:'20'}]},await f.context.pin(f.intent.account)),/secondary-only|origination guard/);
  assert.equal(f.calls.some(c=>c.simulation),false);
 });

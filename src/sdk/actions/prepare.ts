@@ -1,4 +1,5 @@
 import { encodeFunctionData, isAddress, type Abi } from 'viem';
+import { assertNewBusinessMarket } from '../productMarketPolicy.ts';
 import { erc20Abi } from '../abi.ts';
 import type { Address, MarketState, Position } from '../types.ts';
 import type { ActionContext, ReadContext, ContractRead } from './context.ts';
@@ -23,6 +24,7 @@ export async function evaluateAction(context:ActionContext,intent:ActionIntent,c
  if(!isAddress(intent.account)||!isAddress(intent.receiver)||intent.account.toLowerCase()!==ctx.account.toLowerCase()||ctx.chainId!==context.profile.chainId||ctx.core.toLowerCase()!==context.profile.core.toLowerCase())throw new ActionError('DOMAIN_MISMATCH','Account or deployment mismatch');
  if(ctx.snapshot.coverage!=='complete')throw new ActionError('UPSTREAM_UNAVAILABLE','Relevant snapshot must be complete',true);
  const action=intent.action as BasicAction, market=await context.market(intent.marketId,ctx.signal), p=market.params;
+ if(action==='fund'||action==='escrow_collateral')assertNewBusinessMarket(context.profile,p,ctx.timestamp);
  const incoming=['fund','repay','escrow_collateral'].includes(action);
  if(incoming&&intent.receiver.toLowerCase()!==intent.account.toLowerCase())throw new ActionError('INVALID_ARGUMENT','This action credits the account and has no alternate receiver');
  if(action==='withdraw_collateral'&&intent.amount!==undefined)throw new ActionError('INVALID_ARGUMENT','Collateral withdrawal withdraws all unlocked collateral and accepts no amount');
